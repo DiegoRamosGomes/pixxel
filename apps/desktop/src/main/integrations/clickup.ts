@@ -1,6 +1,8 @@
 // ClickUp read-only — token e prefix vêm de process.env.
 // IMPORTANTE: nada de POST/PUT/DELETE. Read-only por design.
 
+import type { TaskDetailWidget, TasksListWidget } from '../../shared/widgets.js';
+
 const BASE = 'https://api.clickup.com/api/v2';
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -184,6 +186,50 @@ export function formatTasksList(tasks: ClickupTask[], emptyMsg: string): string 
   const header =
     total === 1 ? 'Você tem 1 task:\n' : `Você tem ${total} tasks:\n`;
   return header + lines.join('\n') + more;
+}
+
+export function tasksToWidget(
+  title: string,
+  tasks: ClickupTask[],
+): TasksListWidget {
+  return {
+    kind: 'tasks-list',
+    title,
+    tasks: tasks.slice(0, 20).map((t) => ({
+      id: t.id,
+      customId: t.custom_id ?? undefined,
+      name: t.name,
+      status: t.status?.status,
+      priority: t.priority?.id ? PRIORITY_LABEL[t.priority.id] : undefined,
+      url: t.url,
+    })),
+  };
+}
+
+export function taskDetailToWidget(
+  task: ClickupTask,
+  comments: ClickupComment[],
+): TaskDetailWidget {
+  return {
+    kind: 'task-detail',
+    task: {
+      id: task.id,
+      customId: task.custom_id ?? undefined,
+      name: task.name,
+      description: task.text_content || task.description || '',
+      status: task.status?.status,
+      priority: task.priority?.id ? PRIORITY_LABEL[task.priority.id] : undefined,
+      list: task.list?.name,
+      space: task.space?.name,
+      dueDate: task.due_date ?? undefined,
+      url: task.url,
+    },
+    comments: comments.slice(0, 30).map((c) => ({
+      author: c.user?.username ?? 'alguém',
+      text: c.comment_text?.trim() ?? '',
+      date: c.date,
+    })),
+  };
 }
 
 export function buildTaskBriefing(task: ClickupTask, comments: ClickupComment[]): string {

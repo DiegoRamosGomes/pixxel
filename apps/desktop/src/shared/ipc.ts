@@ -1,4 +1,7 @@
 import type { ClientCommand } from '@assistant/shared';
+import type { Widget } from './widgets.js';
+
+export type { Widget } from './widgets.js';
 
 export type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -29,7 +32,8 @@ export type RendererEvent =
   | { type: 'tts_speaking'; speaking: boolean }
   | { type: 'live_state'; state: LiveState }
   | { type: 'live_audio'; pcm: ArrayBuffer; sampleRate: number }
-  | { type: 'live_transcript'; role: 'user' | 'model'; text: string };
+  | { type: 'live_transcript'; role: 'user' | 'model'; text: string }
+  | { type: 'widget'; id: string; widget: Widget; ttlMs: number };
 
 export type AssistantApi = {
   sendText: (text: string) => Promise<void>;

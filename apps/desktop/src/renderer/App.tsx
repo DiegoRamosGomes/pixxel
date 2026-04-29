@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnState, LiveState, RendererEvent } from '../shared/ipc.js';
+import type { Widget } from '../shared/widgets.js';
 import type { ClientCommand } from '@assistant/shared';
 import { Orb, type OrbState } from './components/Orb.js';
+import { WidgetCard } from './components/widgets/WidgetCard.js';
 import { startMicCapture, type MicCaptureHandle } from './audio/mic-capture.js';
 import { PcmStreamPlayer } from './audio/audio-player.js';
 
@@ -48,12 +50,24 @@ export function App() {
     state: 'off' | 'starting' | 'capturing' | 'error';
     info?: string;
   }>({ state: 'off' });
+  type StackItem = {
+    id: string;
+    widget: Widget;
+    x: number;
+    y: number;
+    z: number;
+  };
+  const [widgets, setWidgets] = useState<StackItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const orbPaneRef = useRef<HTMLDivElement>(null);
   const micRef = useRef<MicCaptureHandle | null>(null);
   const playerRef = useRef<PcmStreamPlayer | null>(null);
   const micChunksRef = useRef(0);
-  // ID da mensagem em construção pra cada role; reseta quando turno fecha.
   const liveTranscriptIdRef = useRef<{ user?: string; model?: string }>({});
+  const widgetTimersRef = useRef<Map<string, number>>(new Map());
+  // Contadores pra z-index incremental e rotação de cantos.
+  const widgetZRef = useRef(10);
+  const widgetSpawnIdxRef = useRef(0);
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
@@ -168,6 +182,25 @@ export function App() {
         case 'live_audio':
           playerRef.current?.enqueue(event.pcm);
           break;
+        case 'widget': {
+          const pos = computeSpawnPosition(widgetSpawnIdxRef.current++);
+          widgetZRef.current += 1;
+          setWidgets((prev) => [
+            ...prev,
+            {
+              id: event.id,
+              widget: event.widget,
+              x: pos.x,
+              y: pos.y,
+              z: widgetZRef.current,
+            },
+          ]);
+          const timer = window.setTimeout(() => {
+            dismissWidget(event.id);
+          }, event.ttlMs);
+          widgetTimersRef.current.set(event.id, timer);
+          break;
+        }
         case 'live_transcript': {
           const role = event.role === 'user' ? 'user' : 'assistant';
           const ref = liveTranscriptIdRef.current;
@@ -203,6 +236,48 @@ export function App() {
     });
     return off;
   }, []);
+
+  function dismissWidget(id: string) {
+    setWidgets((prev) => prev.filter((w) => w.id !== id));
+    const t = widgetTimersRef.current.get(id);
+    if (t != null) {
+      window.clearTimeout(t);
+      widgetTimersRef.current.delete(id);
+    }
+  }
+
+  function activateWidget(id: string) {
+    widgetZRef.current += 1;
+    const z = widgetZRef.current;
+    setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, z } : w)));
+  }
+
+  // Rotaciona spawn entre 4 cantos do orb-pane com pequeno stagger pra
+  // várias respostas seguidas não cairem no mesmo lugar.
+  function computeSpawnPosition(idx: number): { x: number; y: number } {
+    const pane = orbPaneRef.current;
+    const w = pane?.clientWidth ?? 800;
+    const h = pane?.clientHeight ?? 600;
+    const widgetW = Math.min(360, w * 0.36);
+    const widgetH = 200; // estimativa — só usado pra colocar perto do canto
+    const margin = 24;
+    const stagger = 28;
+    const stage = Math.floor(idx / 4);
+    const corner = idx % 4;
+    const off = stage * stagger;
+    switch (corner) {
+      case 0:
+        return { x: w - widgetW - margin - off, y: margin + off };
+      case 1:
+        return { x: margin + off, y: margin + off };
+      case 2:
+        return { x: w - widgetW - margin - off, y: h - widgetH - margin - off };
+      case 3:
+        return { x: margin + off, y: h - widgetH - margin - off };
+      default:
+        return { x: margin, y: margin };
+    }
+  }
 
   async function stopMicLocal() {
     if (micRef.current) {
@@ -445,8 +520,23 @@ export function App() {
       </header>
 
       <main>
-        <div className="orb-pane">
+        <div className="orb-pane" ref={orbPaneRef}>
           <Orb state={orbState} />
+          {widgets.map((w) => (
+            <div
+              key={w.id}
+              className="widget-slot"
+              style={{ zIndex: w.z }}
+            >
+              <WidgetCard
+                widget={w.widget}
+                initialX={w.x}
+                initialY={w.y}
+                onDismiss={() => dismissWidget(w.id)}
+                onActivate={() => activateWidget(w.id)}
+              />
+            </div>
+          ))}
         </div>
 
         <div className="chat-pane">

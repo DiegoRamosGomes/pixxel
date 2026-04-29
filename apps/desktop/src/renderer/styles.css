@@ -138,6 +138,7 @@ main {
 
 /* ====== ORB ====== */
 .orb-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -146,6 +147,7 @@ main {
   padding: 24px;
   border-right: 1px solid var(--border);
   background: linear-gradient(180deg, transparent, rgba(0, 212, 255, 0.02));
+  overflow: hidden;
 }
 
 .orb {
@@ -267,6 +269,337 @@ main {
 }
 .orb-state--speaking {
   color: var(--accent);
+}
+
+/* ====== WIDGETS ====== */
+.widget-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(360px, 36vw);
+  /* z-index é aplicado inline via state pra trazer pra frente ao clicar */
+}
+
+.widget-wrap {
+  position: relative;
+  will-change: transform;
+  /* Só fade-in — NÃO mexer no transform aqui pra não brigar com a
+     posição inline aplicada pelo drag/spawn. */
+  animation: widget-in 220ms ease-out;
+}
+
+.widget-wrap--dragging {
+  cursor: grabbing;
+}
+.widget-wrap--dragging .widget__head {
+  cursor: grabbing;
+}
+
+@keyframes widget-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.widget-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+  transition: all 120ms ease;
+}
+.widget-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.widget {
+  background: linear-gradient(
+    180deg,
+    rgba(16, 21, 31, 0.92),
+    rgba(12, 16, 24, 0.92)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 212, 255, 0.22);
+  border-radius: 14px;
+  box-shadow:
+    0 0 28px rgba(0, 212, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.widget__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+  background: linear-gradient(
+    90deg,
+    rgba(0, 212, 255, 0.08),
+    transparent
+  );
+  cursor: grab;
+  user-select: none;
+}
+.widget__head:active {
+  cursor: grabbing;
+}
+
+.widget__kind {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.widget__loc {
+  font-size: 11px;
+  color: var(--text-soft);
+  font-family: var(--mono);
+}
+
+.widget__body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- Weather --- */
+.weather__main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.weather__icon {
+  font-size: 44px;
+  line-height: 1;
+}
+
+.weather__temp {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+.weather__cond {
+  font-size: 13px;
+  color: var(--text-soft);
+  margin-top: 2px;
+  text-transform: capitalize;
+}
+
+.weather__meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  padding-top: 8px;
+}
+
+/* --- Tasks list --- */
+.tasks__title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.tasks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.tasks__list::-webkit-scrollbar {
+  width: 4px;
+}
+.tasks__list::-webkit-scrollbar-thumb {
+  background: var(--surface-2);
+  border-radius: 2px;
+}
+
+.task {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.task__name {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.task__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+.task__id {
+  color: var(--accent);
+}
+
+.task__status {
+  text-transform: lowercase;
+}
+
+.task__prio {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.task__prio--urgent {
+  color: var(--error);
+  border-color: rgba(255, 93, 108, 0.4);
+}
+.task__prio--high {
+  color: var(--yellow);
+  border-color: rgba(241, 196, 15, 0.35);
+}
+
+.tasks__empty {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* --- Task detail --- */
+.task-detail__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.task-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.task-detail__desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+
+.task-detail__comments {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.task-detail__comments-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.task-detail__comments ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-soft);
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* --- YouTube --- */
+.widget--youtube .widget__body {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.yt__thumb-link {
+  display: block;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.yt__thumb {
+  width: 120px;
+  height: 67.5px;
+  display: block;
+  object-fit: cover;
+  transition: transform 200ms ease;
+}
+.yt__thumb-link:hover .yt__thumb {
+  transform: scale(1.04);
+}
+
+.yt__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.yt__title {
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.yt__channel {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-family: var(--mono);
+}
+
+@media (max-width: 720px) {
+  .widget-slot {
+    width: calc(100% - 32px);
+  }
 }
 
 /* ====== CHAT ====== */

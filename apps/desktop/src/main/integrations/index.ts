@@ -1,5 +1,5 @@
 import { shell } from 'electron';
-import { fetchWeatherText } from './weather.js';
+import { fetchWeather } from './weather.js';
 import {
   buildTaskBriefing,
   formatTasksList,
@@ -7,11 +7,19 @@ import {
   isClickupAvailable,
   listMyHighPriorityTasks,
   listMyInProgressTasks,
+  taskDetailToWidget,
+  tasksToWidget,
 } from './clickup.js';
 import { isYoutubeAvailable, resolveYoutube, type YoutubePrefer } from './youtube.js';
+import type { Widget } from '../../shared/widgets.js';
 
 export type IntegrationResult =
-  | { ok: true; text: string; meta?: Record<string, unknown> }
+  | {
+      ok: true;
+      text: string;
+      widget?: Widget;
+      meta?: Record<string, unknown>;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -29,8 +37,8 @@ export async function executeIntegration(
   switch (name) {
     case 'weather': {
       const when = (args.when as 'today' | 'tomorrow' | undefined) ?? 'today';
-      const text = await fetchWeatherText(when);
-      return { ok: true, text };
+      const r = await fetchWeather(when);
+      return { ok: true, text: r.text, widget: r.widget };
     }
 
     case 'play_youtube': {
@@ -53,6 +61,14 @@ export async function executeIntegration(
       return {
         ok: true,
         text: `Tocando "${result.title}"${result.channel ? ` de ${result.channel}` : ''}.`,
+        widget: {
+          kind: 'youtube',
+          videoId: result.videoId,
+          title: result.title,
+          channel: result.channel,
+          thumbnailUrl: `https://i.ytimg.com/vi/${result.videoId}/mqdefault.jpg`,
+          url: result.url,
+        },
         meta: { videoId: result.videoId, url: result.url },
       };
     }
@@ -66,6 +82,7 @@ export async function executeIntegration(
       return {
         ok: true,
         text: formatTasksList(tasks, 'Você não tem tasks em progresso agora.'),
+        widget: tasksToWidget('Em progresso', tasks),
       };
     }
 
@@ -78,6 +95,7 @@ export async function executeIntegration(
       return {
         ok: true,
         text: formatTasksList(tasks, 'Você não tem tasks de prioridade urgente ou alta.'),
+        widget: tasksToWidget('Prioridade alta/urgente', tasks),
       };
     }
 
@@ -89,7 +107,11 @@ export async function executeIntegration(
       if (!taskId) return { ok: false, reason: 'taskId vazio' };
       const data = await getTaskDetails(taskId);
       if (!data) return { ok: false, reason: `task ${taskId} não encontrada` };
-      return { ok: true, text: buildTaskBriefing(data.task, data.comments) };
+      return {
+        ok: true,
+        text: buildTaskBriefing(data.task, data.comments),
+        widget: taskDetailToWidget(data.task, data.comments),
+      };
     }
 
     default:

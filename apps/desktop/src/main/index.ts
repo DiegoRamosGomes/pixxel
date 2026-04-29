@@ -12,8 +12,24 @@ import { executeCommand } from './executor.js';
 import { executeIntegration, INTEGRATION_NAMES } from './integrations/index.js';
 import { ClientCommandSchema } from '@assistant/shared';
 import { randomUUID } from 'node:crypto';
+import type { Widget } from '../shared/widgets.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+function ttlForWidget(kind: string): number {
+  switch (kind) {
+    case 'weather':
+      return 30_000;
+    case 'tasks-list':
+      return 60_000;
+    case 'task-detail':
+      return 90_000;
+    case 'youtube':
+      return 45_000;
+    default:
+      return 30_000;
+  }
+}
 
 const WS_URL = process.env.WS_URL ?? 'ws://localhost:8080/ws';
 const CLIENT_TOKEN = process.env.CLIENT_TOKEN ?? '';
@@ -136,6 +152,10 @@ app.whenReady().then(() => {
       // Already running — idempotente
       return { ok: true };
     }
+    // Widgets ficam pendentes até o primeiro chunk de áudio depois da tool call,
+    // pra aparecerem em sincronia com a fala (não na hora que a integração
+    // termina, que pode ser bem antes).
+    const pendingWidgets: Array<{ id: string; widget: Widget; ttlMs: number }> = [];
     live = new GeminiLiveClient(
       GEMINI_API_KEY,
       {
@@ -146,6 +166,18 @@ app.whenReady().then(() => {
           }
         },
         onAudio: (pcm) => {
+          // Flush widgets pendentes antes do primeiro chunk pra aparecerem
+          // junto com o início da fala
+          if (pendingWidgets.length > 0) {
+            console.log(
+              `[live] flushing ${pendingWidgets.length} pending widget(s) on audio chunk`,
+            );
+            for (const p of pendingWidgets) {
+              if (p.widget)
+                emit({ type: 'widget', id: p.id, widget: p.widget, ttlMs: p.ttlMs });
+            }
+            pendingWidgets.length = 0;
+          }
           const ab = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer;
           emit({ type: 'live_audio', pcm: ab, sampleRate: 24000 });
         },
@@ -158,6 +190,20 @@ app.whenReady().then(() => {
           if (INTEGRATION_NAMES.has(call.name)) {
             const intRes = await executeIntegration(call.name, call.args);
             if (intRes) {
+              if (intRes.ok && intRes.widget) {
+                pendingWidgets.push({
+                  id: randomUUID(),
+                  widget: intRes.widget,
+                  ttlMs: ttlForWidget(intRes.widget.kind),
+                });
+                console.log(
+                  `[live] widget enfileirado (${intRes.widget.kind}). pending=${pendingWidgets.length}`,
+                );
+              } else {
+                console.log(
+                  `[live] tool ${call.name} sem widget (ok=${intRes.ok}, hasWidget=${!!('widget' in intRes && intRes.widget)})`,
+                );
+              }
               live?.sendToolResponse(call.id, call.name, intRes);
               return;
             }

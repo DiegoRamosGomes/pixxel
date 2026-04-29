@@ -1,6 +1,10 @@
 // Clima: ipapi.co (geolocalização) + Open-Meteo (forecast). Ambos free, sem key.
 
+import type { WeatherWidget } from '../../shared/widgets.js';
+
 type Geo = { latitude: number; longitude: number; city: string; country: string };
+
+export type WeatherResult = { text: string; widget?: WeatherWidget };
 
 async function lookupGeo(): Promise<Geo | null> {
   try {
@@ -56,9 +60,11 @@ function describeCode(code: number | undefined): string {
   return WMO_CODES[code] ?? `código ${code}`;
 }
 
-export async function fetchWeatherText(when: 'today' | 'tomorrow'): Promise<string> {
+export async function fetchWeather(
+  when: 'today' | 'tomorrow',
+): Promise<WeatherResult> {
   const geo = await lookupGeo();
-  if (!geo) return 'Não consegui descobrir sua localização agora.';
+  if (!geo) return { text: 'Não consegui descobrir sua localização agora.' };
 
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}` +
@@ -71,9 +77,9 @@ export async function fetchWeatherText(when: 'today' | 'tomorrow'): Promise<stri
     res = await fetch(url);
   } catch (err) {
     console.warn('[weather] open-meteo fetch failed:', err);
-    return 'Não consegui falar com o serviço de clima agora.';
+    return { text: 'Não consegui falar com o serviço de clima agora.' };
   }
-  if (!res.ok) return 'O serviço de clima respondeu com erro.';
+  if (!res.ok) return { text: 'O serviço de clima respondeu com erro.' };
 
   const data = (await res.json()) as {
     current?: { temperature_2m?: number; weather_code?: number };
@@ -91,13 +97,28 @@ export async function fetchWeatherText(when: 'today' | 'tomorrow'): Promise<stri
     const max = data.daily?.temperature_2m_max?.[0];
     const min = data.daily?.temperature_2m_min?.[0];
     const rain = data.daily?.precipitation_probability_max?.[0];
-    if (t == null || code == null) return 'Sem dados de clima agora.';
-    let txt = `Em ${geo.city} estão ${Math.round(t)}°C, ${describeCode(code)}.`;
+    if (t == null || code == null) return { text: 'Sem dados de clima agora.' };
+    const condition = describeCode(code);
+    let text = `Em ${geo.city} estão ${Math.round(t)}°C, ${condition}.`;
     if (min != null && max != null) {
-      txt += ` Mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
+      text += ` Mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
     }
-    if (rain != null && rain >= 30) txt += ` ${rain}% de chance de chuva hoje.`;
-    return txt;
+    if (rain != null && rain >= 30) text += ` ${rain}% de chance de chuva hoje.`;
+    return {
+      text,
+      widget: {
+        kind: 'weather',
+        when: 'today',
+        city: geo.city,
+        country: geo.country,
+        tempC: t,
+        weatherCode: code,
+        condition,
+        minC: min ?? undefined,
+        maxC: max ?? undefined,
+        rainPercent: rain ?? undefined,
+      },
+    };
   }
 
   // tomorrow
@@ -105,8 +126,22 @@ export async function fetchWeatherText(when: 'today' | 'tomorrow'): Promise<stri
   const max = data.daily?.temperature_2m_max?.[1];
   const min = data.daily?.temperature_2m_min?.[1];
   const rain = data.daily?.precipitation_probability_max?.[1];
-  if (code == null || max == null || min == null) return 'Sem previsão pra amanhã.';
-  let txt = `Amanhã em ${geo.city}: ${describeCode(code)}, mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
-  if (rain != null && rain >= 30) txt += ` ${rain}% de chance de chuva.`;
-  return txt;
+  if (code == null || max == null || min == null) return { text: 'Sem previsão pra amanhã.' };
+  const condition = describeCode(code);
+  let text = `Amanhã em ${geo.city}: ${condition}, mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
+  if (rain != null && rain >= 30) text += ` ${rain}% de chance de chuva.`;
+  return {
+    text,
+    widget: {
+      kind: 'weather',
+      when: 'tomorrow',
+      city: geo.city,
+      country: geo.country,
+      weatherCode: code,
+      condition,
+      minC: min,
+      maxC: max,
+      rainPercent: rain ?? undefined,
+    },
+  };
 }

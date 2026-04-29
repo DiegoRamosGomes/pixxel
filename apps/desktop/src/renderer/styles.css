@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-
 :root {
   color-scheme: dark;
   --bg: #07090d;
@@ -152,101 +150,98 @@ main {
 
 .orb {
   position: relative;
-  width: min(360px, 60vh);
-  height: min(360px, 60vh);
+  width: min(420px, 64vh);
+  height: min(420px, 64vh);
   display: flex;
   align-items: center;
   justify-content: center;
+  filter: drop-shadow(0 0 36px var(--accent-glow-soft));
+}
+
+.orb__svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Origem em torno do centro do viewBox (200,200) — usada por todos os <g> que giram. */
+.orb__rot,
+.orb__flower,
+.orb__ticks,
+.orb__core {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.orb__rot--slow {
+  animation: orb-rotate 60s linear infinite;
+}
+.orb__rot--rev {
+  animation: orb-rotate 40s linear infinite reverse;
+}
+
+.orb__flower {
+  animation: orb-flower-pulse 6s ease-in-out infinite;
 }
 
 .orb__core {
-  position: absolute;
-  width: 42%;
-  height: 42%;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 35% 30%,
-    #cdf3ff 0%,
-    var(--accent) 38%,
-    var(--accent-soft) 75%,
-    #06304a 100%
-  );
-  box-shadow:
-    0 0 60px var(--accent-glow),
-    0 0 120px var(--accent-glow-soft),
-    inset 0 0 40px rgba(255, 255, 255, 0.2);
-  animation: orb-pulse 3.6s ease-in-out infinite;
+  animation: orb-core-pulse 4.5s ease-in-out infinite;
+  transform-origin: 200px 200px;
 }
 
-.orb__halo {
-  position: absolute;
-  width: 78%;
-  height: 78%;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 212, 255, 0.32);
-  filter: blur(0.5px);
-  animation: orb-rotate 18s linear infinite;
+/* Ticks têm uma respiração sutil — aumenta opacidade conforme estado */
+.orb__ticks line {
+  transition: stroke-opacity 600ms ease;
 }
 
-.orb__halo--alt {
-  width: 100%;
-  height: 100%;
-  border-color: rgba(0, 212, 255, 0.18);
-  border-style: dashed;
-  animation: orb-rotate 28s linear infinite reverse;
+/* ===== Estados ===== */
+.orb--thinking .orb__rot--slow {
+  animation-duration: 18s;
 }
-
-/* Estados */
+.orb--thinking .orb__rot--rev {
+  animation-duration: 12s;
+}
 .orb--thinking .orb__core {
-  animation: orb-pulse 1.4s ease-in-out infinite;
+  animation: orb-core-pulse 1.6s ease-in-out infinite;
 }
-.orb--thinking .orb__halo {
-  animation-duration: 6s;
-  border-color: rgba(0, 212, 255, 0.55);
+.orb--thinking .orb__flower {
+  animation: orb-flower-pulse 2.2s ease-in-out infinite;
 }
 
+.orb--speaking .orb__rot--slow {
+  animation-duration: 8s;
+}
+.orb--speaking .orb__rot--rev {
+  animation-duration: 6s;
+}
 .orb--speaking .orb__core {
-  animation: orb-pulse-fast 0.55s ease-in-out infinite;
-  box-shadow:
-    0 0 36px var(--accent-glow),
-    0 0 64px var(--accent-glow-soft),
-    inset 0 0 22px rgba(255, 255, 255, 0.26);
+  animation: orb-core-pulse-fast 0.6s ease-in-out infinite;
 }
-.orb--speaking .orb__halo {
-  animation-duration: 4s;
-  border-color: rgba(0, 212, 255, 0.65);
+.orb--speaking .orb__flower {
+  animation: orb-flower-pulse 1s ease-in-out infinite;
 }
-.orb--speaking .orb__halo--alt {
-  animation-duration: 6s;
-}
-
-@keyframes orb-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.06);
-    opacity: 0.92;
-  }
-}
-
-@keyframes orb-pulse-fast {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.12);
-  }
+.orb--speaking {
+  filter: drop-shadow(0 0 56px var(--accent-glow));
 }
 
 @keyframes orb-rotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-core-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.04); opacity: 0.85; }
+}
+
+@keyframes orb-core-pulse-fast {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.9; }
+}
+
+@keyframes orb-flower-pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
 }
 
 @media (max-width: 720px) {

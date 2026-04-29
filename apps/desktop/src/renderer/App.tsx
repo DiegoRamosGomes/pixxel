@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ConnState, RendererEvent } from '../shared/ipc.js';
+import type { ConnState, LiveState, RendererEvent } from '../shared/ipc.js';
 import type { ClientCommand } from '@assistant/shared';
 import { Orb, type OrbState } from './components/Orb.js';
+import { startMicCapture, type MicCaptureHandle } from './audio/mic-capture.js';
+import { PcmStreamPlayer } from './audio/audio-player.js';
 
 type Role = 'user' | 'assistant';
 
@@ -41,7 +43,17 @@ export function App() {
   const [draft, setDraft] = useState('');
   const [tts, setTts] = useState<TtsState>({ enabled: false, available: false, speaking: false });
   const [awaitingResponse, setAwaitingResponse] = useState(false);
+  const [live, setLive] = useState<LiveState>({ kind: 'idle' });
+  const [micStatus, setMicStatus] = useState<{
+    state: 'off' | 'starting' | 'capturing' | 'error';
+    info?: string;
+  }>({ state: 'off' });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const micRef = useRef<MicCaptureHandle | null>(null);
+  const playerRef = useRef<PcmStreamPlayer | null>(null);
+  const micChunksRef = useRef(0);
+  // ID da mensagem em construção pra cada role; reseta quando turno fecha.
+  const liveTranscriptIdRef = useRef<{ user?: string; model?: string }>({});
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
@@ -142,10 +154,96 @@ export function App() {
         case 'tts_speaking':
           setTts((prev) => ({ ...prev, speaking: event.speaking }));
           break;
+        case 'live_state':
+          setLive(event.state);
+          // Quando o turno do modelo termina (volta pra 'ready') ou tudo morre,
+          // fecha as mensagens em construção pra o próximo turno virar entrada nova.
+          if (event.state.kind !== 'speaking') {
+            liveTranscriptIdRef.current = {};
+          }
+          if (event.state.kind === 'closed' || event.state.kind === 'error' || event.state.kind === 'idle') {
+            void teardownLiveLocal();
+          }
+          break;
+        case 'live_audio':
+          playerRef.current?.enqueue(event.pcm);
+          break;
+        case 'live_transcript': {
+          const role = event.role === 'user' ? 'user' : 'assistant';
+          const ref = liveTranscriptIdRef.current;
+          const existingId = event.role === 'user' ? ref.user : ref.model;
+          if (existingId) {
+            // Append no já existente
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === existingId && m.kind === 'text'
+                  ? { ...m, content: m.content + event.text }
+                  : m,
+              ),
+            );
+          } else {
+            const id = crypto.randomUUID();
+            if (event.role === 'user') ref.user = id;
+            else ref.model = id;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id,
+                kind: 'text',
+                role,
+                content: event.text,
+                streaming: true,
+                model: event.role === 'model' ? 'gemini-live' : undefined,
+              },
+            ]);
+          }
+          break;
+        }
       }
     });
     return off;
   }, []);
+
+  async function stopMicLocal() {
+    if (micRef.current) {
+      await micRef.current.stop();
+      micRef.current = null;
+    }
+    micChunksRef.current = 0;
+    setMicStatus({ state: 'off' });
+  }
+
+  async function teardownLiveLocal() {
+    await stopMicLocal();
+    if (playerRef.current) {
+      await playerRef.current.close();
+      playerRef.current = null;
+    }
+  }
+
+  async function startMicLocal() {
+    if (micRef.current) return;
+    setMicStatus({ state: 'starting' });
+    try {
+      micRef.current = await startMicCapture((pcm) => {
+        micChunksRef.current += 1;
+        if (micChunksRef.current === 1) {
+          setMicStatus({ state: 'capturing', info: '1 chunk' });
+        } else if (micChunksRef.current % 25 === 0) {
+          setMicStatus({
+            state: 'capturing',
+            info: `${micChunksRef.current} chunks`,
+          });
+        }
+        window.assistant.liveSendAudio(pcm);
+      });
+      setMicStatus({ state: 'capturing', info: 'aguardando primeiro chunk…' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'mic indisponível';
+      console.warn('[live] mic capture failed:', msg);
+      setMicStatus({ state: 'error', info: msg });
+    }
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -155,18 +253,24 @@ export function App() {
   }, [messages]);
 
   const orbState: OrbState = useMemo(() => {
-    if (tts.speaking) return 'speaking';
-    if (awaitingResponse) return 'thinking';
+    if (live.kind === 'speaking' || tts.speaking) return 'speaking';
+    if (live.kind === 'connecting' || awaitingResponse) return 'thinking';
     const lastIsStreaming =
       messages.length > 0 &&
       messages[messages.length - 1].kind === 'text' &&
       (messages[messages.length - 1] as Extract<Message, { kind: 'text' }>).streaming;
     return lastIsStreaming ? 'thinking' : 'idle';
-  }, [messages, tts.speaking, awaitingResponse]);
+  }, [messages, tts.speaking, awaitingResponse, live.kind]);
 
   async function send() {
     const text = draft.trim();
-    if (!text || conn.state !== 'open') return;
+    if (!text) return;
+
+    const liveReady = live.kind === 'ready' || live.kind === 'speaking';
+    // Se a sessão Live tá viva, manda pra ela: resposta vem em áudio com a
+    // mesma voz da conversa por mic. Senão, cai no pipeline atual (backend/NIM).
+    if (!liveReady && conn.state !== 'open') return;
+
     setMessages((prev) => [
       ...prev,
       {
@@ -179,6 +283,29 @@ export function App() {
     ]);
     setDraft('');
     setAwaitingResponse(true);
+
+    if (liveReady) {
+      // Garante que o player está pronto pra tocar a resposta — caso o
+      // usuário tenha o Live ligado mas nunca tenha falado nada antes.
+      if (!playerRef.current) playerRef.current = new PcmStreamPlayer(24000);
+      await playerRef.current.resume();
+      const res = await window.assistant.liveSendText(text);
+      if (!res.ok) {
+        setAwaitingResponse(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            kind: 'text',
+            role: 'assistant',
+            content: `[live error: ${res.reason ?? 'desconhecido'}]`,
+            streaming: false,
+          },
+        ]);
+      }
+      return;
+    }
+
     await window.assistant.sendText(text);
   }
 
@@ -194,11 +321,87 @@ export function App() {
     setTts((prev) => ({ ...prev, ...next }));
   }
 
+  async function onToggleLive() {
+    const isActive =
+      live.kind === 'connecting' || live.kind === 'ready' || live.kind === 'speaking';
+    if (isActive) {
+      await window.assistant.liveStop();
+      await teardownLiveLocal();
+      return;
+    }
+    const res = await window.assistant.liveStart();
+    if (!res.ok) {
+      setLive({ kind: 'unavailable', reason: res.reason ?? 'falhou ao iniciar' });
+      return;
+    }
+    if (!playerRef.current) {
+      playerRef.current = new PcmStreamPlayer(24000);
+    }
+    await playerRef.current.resume();
+    // NÃO inicia mic automaticamente — usuário escolhe via botão dedicado.
+  }
+
+  async function onToggleMic() {
+    const liveReady = live.kind === 'ready' || live.kind === 'speaking';
+    if (!liveReady) return;
+    if (micRef.current) {
+      await stopMicLocal();
+    } else {
+      await startMicLocal();
+    }
+  }
+
   const ttsLabel = !tts.available
     ? '🔇 sem voz'
     : tts.enabled
       ? '🔊 voz ligada'
       : '🔇 voz mudo';
+
+  const liveActive =
+    live.kind === 'connecting' || live.kind === 'ready' || live.kind === 'speaking';
+  const liveReady = live.kind === 'ready' || live.kind === 'speaking';
+  const liveLabel = (() => {
+    switch (live.kind) {
+      case 'connecting':
+        return '⚡ conectando…';
+      case 'ready':
+        return '⚡ jarvis on';
+      case 'speaking':
+        return '⚡ falando…';
+      case 'unavailable':
+        return '⚡ indisponível';
+      case 'error':
+        return '⚡ erro';
+      case 'closed':
+        return '⚡ caiu';
+      default:
+        return '⚡ jarvis off';
+    }
+  })();
+  const liveTitle =
+    live.kind === 'unavailable' || live.kind === 'error' || live.kind === 'closed'
+      ? `${liveLabel} · ${(live as { reason?: string; message?: string }).reason ?? (live as { message?: string }).message ?? ''}`
+      : 'Liga/desliga sessão Gemini Live (texto e voz)';
+
+  const micOn = micStatus.state === 'capturing';
+  const micLabel = (() => {
+    if (!liveReady) return '🎙 mic';
+    switch (micStatus.state) {
+      case 'starting':
+        return '🎙 ligando…';
+      case 'capturing':
+        return '🎙 mic on';
+      case 'error':
+        return '🎙 mic erro';
+      default:
+        return '🎙 mic off';
+    }
+  })();
+  const micTitle = !liveReady
+    ? 'Liga o Jarvis primeiro pra usar o mic'
+    : micStatus.state === 'error'
+      ? `mic erro: ${micStatus.info ?? '?'}`
+      : 'Liga/desliga captura do microfone';
 
   return (
     <div className="app">
@@ -210,10 +413,27 @@ export function App() {
         <div className="header-right">
           <button
             type="button"
+            className={`tts-toggle ${liveActive ? 'tts-toggle--on' : ''}`}
+            onClick={onToggleLive}
+            title={liveTitle}
+          >
+            {liveLabel}
+          </button>
+          <button
+            type="button"
+            className={`tts-toggle ${micOn ? 'tts-toggle--on' : ''}`}
+            onClick={onToggleMic}
+            disabled={!liveReady}
+            title={micTitle}
+          >
+            {micLabel}
+          </button>
+          <button
+            type="button"
             className={`tts-toggle ${tts.enabled ? 'tts-toggle--on' : ''}`}
             onClick={onToggleTts}
             disabled={!tts.available}
-            title={tts.available ? 'Liga/desliga voz' : 'Piper TTS não configurado'}
+            title={tts.available ? 'Liga/desliga voz local (Piper)' : 'Piper TTS não configurado'}
           >
             {ttsLabel}
           </button>
@@ -277,18 +497,30 @@ export function App() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={
-            conn.state === 'open'
+          placeholder={(() => {
+            if (live.kind === 'ready' || live.kind === 'speaking') {
+              return 'Digite — Jarvis responde por voz…';
+            }
+            return conn.state === 'open'
               ? 'Digite uma mensagem…'
-              : 'Aguardando conexão com o backend…'
+              : 'Aguardando conexão com o backend…';
+          })()}
+          disabled={
+            conn.state !== 'open' &&
+            live.kind !== 'ready' &&
+            live.kind !== 'speaking'
           }
-          disabled={conn.state !== 'open'}
           rows={2}
         />
         <button
           type="button"
           onClick={send}
-          disabled={conn.state !== 'open' || !draft.trim()}
+          disabled={
+            !draft.trim() ||
+            (conn.state !== 'open' &&
+              live.kind !== 'ready' &&
+              live.kind !== 'speaking')
+          }
         >
           enviar
         </button>

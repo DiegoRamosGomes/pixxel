@@ -1,0 +1,23 @@
+node_modules
+dist
+build
+out
+.env
+.env.local
+*.log
+.DS_Store
+
+# SQLite
+apps/backend/data/*.db
+apps/backend/data/*.db-journal
+apps/backend/data/*.db-wal
+apps/backend/data/*.db-shm
+
+# Electron
+apps/desktop/release
+
+# Whisper / Piper resources (binários e modelos podem ser grandes)
+apps/desktop/resources/whisper/*.bin
+apps/desktop/resources/piper/*.onnx
+apps/desktop/resources/piper/piper
+apps/desktop/resources/porcupine/*.ppn

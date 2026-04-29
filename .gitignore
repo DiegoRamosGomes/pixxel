@@ -19,5 +19,8 @@ apps/desktop/release
 # Whisper / Piper resources (binários e modelos podem ser grandes)
 apps/desktop/resources/whisper/*.bin
 apps/desktop/resources/piper/*.onnx
+apps/desktop/resources/piper/*.onnx.json
 apps/desktop/resources/piper/piper
+apps/desktop/resources/piper/*.so*
+apps/desktop/resources/piper/espeak-ng-data/
 apps/desktop/resources/porcupine/*.ppn

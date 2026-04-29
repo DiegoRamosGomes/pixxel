@@ -6,6 +6,15 @@ import { executeCommand } from './executor.js';
 
 type Emit = (event: RendererEvent) => void;
 
+export type WsHooks = {
+  /** Chamado a cada `assistant_chunk` antes de emitir pro renderer. */
+  onAssistantTextChunk?: (delta: string) => void;
+  /** Chamado quando `assistant_done` chega (fim do stream). */
+  onAssistantTextEnd?: () => void;
+  /** Chamado pra cada comando recebido — útil pra falar o spokenLabel. */
+  onAssistantCommandLabel?: (label: string) => void;
+};
+
 export class AssistantWsClient {
   private ws: WebSocket | null = null;
   private reconnectDelay = 1000;
@@ -18,6 +27,7 @@ export class AssistantWsClient {
     private readonly url: string,
     private readonly token: string,
     private readonly emit: Emit,
+    private readonly hooks: WsHooks = {},
     sessionId?: string,
   ) {
     this.sessionId = sessionId ?? randomUUID();
@@ -64,6 +74,7 @@ export class AssistantWsClient {
           });
           break;
         case 'assistant_chunk':
+          this.hooks.onAssistantTextChunk?.(event.delta);
           this.emit({
             type: 'assistant_chunk',
             messageId: event.messageId,
@@ -71,6 +82,7 @@ export class AssistantWsClient {
           });
           break;
         case 'assistant_done':
+          this.hooks.onAssistantTextEnd?.();
           this.emit({
             type: 'assistant_done',
             messageId: event.messageId,
@@ -85,6 +97,7 @@ export class AssistantWsClient {
           });
           break;
         case 'assistant_command': {
+          this.hooks.onAssistantCommandLabel?.(event.spokenLabel);
           const exec = await executeCommand(event.command);
           this.emit({
             type: 'assistant_command',

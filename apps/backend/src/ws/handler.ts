@@ -95,6 +95,16 @@ export function handleConnection(socket: WebSocket): void {
           onChatDelta: (delta) => {
             send(socket, { type: 'assistant_chunk', messageId, delta });
           },
+          emitSupportMessage: (text, model) => {
+            const supportId = randomUUID();
+            send(socket, { type: 'assistant_start', messageId: supportId, model });
+            send(socket, { type: 'assistant_chunk', messageId: supportId, delta: text });
+            send(socket, {
+              type: 'assistant_done',
+              messageId: supportId,
+              fullText: text,
+            });
+          },
         });
 
         if (outcome.kind === 'chat') {

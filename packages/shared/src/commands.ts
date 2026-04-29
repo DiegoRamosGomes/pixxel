@@ -21,10 +21,19 @@ export const WebSearchCommandSchema = z.object({
 });
 export type WebSearchCommand = z.infer<typeof WebSearchCommandSchema>;
 
+export const MediaControlCommandSchema = z.object({
+  action: z.literal('media_control'),
+  op: z
+    .enum(['play', 'pause', 'play_pause', 'stop', 'next', 'previous'])
+    .describe('Ação de mídia. play_pause é toggle (default pra "pausa/continua")'),
+});
+export type MediaControlCommand = z.infer<typeof MediaControlCommandSchema>;
+
 export const ClientCommandSchema = z.discriminatedUnion('action', [
   OpenAppCommandSchema,
   OpenUrlCommandSchema,
   WebSearchCommandSchema,
+  MediaControlCommandSchema,
 ]);
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
@@ -66,6 +75,7 @@ export const AnyIntentSchema = z.discriminatedUnion('action', [
   OpenAppCommandSchema,
   OpenUrlCommandSchema,
   WebSearchCommandSchema,
+  MediaControlCommandSchema,
   WeatherIntentSchema,
   PlayYoutubeIntentSchema,
   ClickupTasksInProgressIntentSchema,

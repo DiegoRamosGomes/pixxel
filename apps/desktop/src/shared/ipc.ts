@@ -15,10 +15,13 @@ export type RendererEvent =
       source: 'regex' | 'llm';
       executed: { ok: boolean; reason?: string };
     }
-  | { type: 'assistant_error'; code: string; message: string };
+  | { type: 'assistant_error'; code: string; message: string }
+  | { type: 'tts_state'; enabled: boolean; available: boolean }
+  | { type: 'tts_speaking'; speaking: boolean };
 
 export type AssistantApi = {
   sendText: (text: string) => Promise<void>;
+  toggleTts: () => Promise<{ enabled: boolean; available: boolean }>;
   onEvent: (handler: (e: RendererEvent) => void) => () => void;
 };
 

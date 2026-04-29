@@ -129,5 +129,46 @@ export function tryRegexMatch(input: string): RegexHit | null {
     };
   }
 
+  // Controle de mídia (música, vídeo, áudio, som) — toggle/pausa/play/next/prev
+  const lc = stripDiacritics(text).toLowerCase();
+  const targetSuffix =
+    /(?:\s+(?:a\s+)?(?:musica|video|audio|som|reproducao))?(?:\s+(?:agora|por favor))?$/i;
+
+  // pausa/para/interrompe
+  if (
+    new RegExp(`^(?:pausa|pausar|para|parar|pause|interrompe|interromper)${targetSuffix.source}$`, 'i').test(lc)
+  ) {
+    return {
+      command: { action: 'media_control', op: 'pause' },
+      spokenLabel: 'Pausando.',
+    };
+  }
+
+  // continua/retoma/volta a tocar
+  if (
+    /^(?:continua(?:r)?|retoma(?:r)?|despausa(?:r)?|toca(?:r)?\s+de\s+novo|volta(?:r)?\s+a\s+tocar)/i.test(lc)
+  ) {
+    return {
+      command: { action: 'media_control', op: 'play' },
+      spokenLabel: 'Tocando de novo.',
+    };
+  }
+
+  // próxima música/vídeo
+  if (/^(?:proxima|proximo|pula|pular|skip|next)/i.test(lc)) {
+    return {
+      command: { action: 'media_control', op: 'next' },
+      spokenLabel: 'Próxima.',
+    };
+  }
+
+  // anterior/volta a anterior
+  if (/^(?:anterior|volta(?:r)?(?:\s+(?:a|para))?(?:\s+(?:musica|video|audio))?$|previous|musica\s+anterior|video\s+anterior)/i.test(lc)) {
+    return {
+      command: { action: 'media_control', op: 'previous' },
+      spokenLabel: 'Anterior.',
+    };
+  }
+
   return null;
 }

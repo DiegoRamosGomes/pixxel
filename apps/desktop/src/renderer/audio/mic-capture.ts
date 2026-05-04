@@ -12,15 +12,16 @@ export type MicCaptureHandle = {
 
 export async function startMicCapture(
   onChunk: (pcm16k: ArrayBuffer) => void,
+  audioDeviceId?: string | null,
 ): Promise<MicCaptureHandle> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  const audio: MediaTrackConstraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  if (audioDeviceId) audio.deviceId = { exact: audioDeviceId };
+  const stream = await navigator.mediaDevices.getUserMedia({ audio });
 
   // Força sample rate a 16kHz — Chromium resampleia o mic pra esse rate.
   const ctx = new AudioContext({ sampleRate: 16000 });

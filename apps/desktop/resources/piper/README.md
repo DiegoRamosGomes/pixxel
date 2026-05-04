@@ -38,7 +38,7 @@ apps/desktop/resources/piper/
 Teste:
 
 ```sh
-echo "Olá, eu sou o Jarvis." | ./piper --model pt_BR-faber-medium.onnx --output_file teste.wav
+echo "Olá, eu sou o Pixxel." | ./piper --model pt_BR-faber-medium.onnx --output_file teste.wav
 ```
 
 (precisa ter o modelo do passo 2 no mesmo diretório)

@@ -6,7 +6,7 @@ const STATE_LABEL: Record<OrbState, string> = {
   speaking: 'falando',
 };
 
-type Props = { state: OrbState };
+type Props = { state: OrbState; present?: boolean };
 
 // Flor da vida: 1 círculo central + 6 ao redor (hex), + 12 outros (camada 2).
 // Distância entre centros = R, raio dos círculos = R.
@@ -38,12 +38,36 @@ const FLOWER = buildFlowerOfLife();
 // 60 marcas (tipo mostrador) — cada 30° é uma marca grossa.
 const TICKS = Array.from({ length: 60 }, (_, i) => i * 6);
 
-export function Orb({ state }: Props) {
+// Caminho ondulado (rosáceo) ao redor do centro (200,200).
+// `lobes` controla quantas cristas, `amp` a amplitude da ondulação.
+function buildWavyPath(baseR: number, amp: number, lobes: number, phase = 0): string {
+  const cx = 200;
+  const cy = 200;
+  const steps = 180;
+  let d = '';
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2;
+    const r = baseR + amp * Math.sin(lobes * t + phase);
+    const x = cx + r * Math.cos(t);
+    const y = cy + r * Math.sin(t);
+    d += i === 0 ? `M${x.toFixed(2)} ${y.toFixed(2)}` : `L${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  return d + 'Z';
+}
+
+const FLOATING_WAVES = [
+  { d: buildWavyPath(150, 10, 6, 0), cls: 'orb__fw--1' },
+  { d: buildWavyPath(162, 7, 9, Math.PI / 4), cls: 'orb__fw--2' },
+  { d: buildWavyPath(174, 5, 12, Math.PI / 2), cls: 'orb__fw--3' },
+  { d: buildWavyPath(184, 4, 15, Math.PI / 3), cls: 'orb__fw--4' },
+];
+
+export function Orb({ state, present = true }: Props) {
   return (
     <>
       <div
-        className={`orb orb--${state}`}
-        aria-label={`assistente ${STATE_LABEL[state]}`}
+        className={`orb orb--${state}${present ? '' : ' orb--away'}`}
+        aria-label={`assistente ${STATE_LABEL[state]}${present ? '' : ' (usuário ausente)'}`}
       >
         <svg
           viewBox="0 0 400 400"
@@ -61,11 +85,6 @@ export function Orb({ state }: Props) {
               <stop offset="55%" stopColor="rgba(0, 168, 230, 0.18)" />
               <stop offset="100%" stopColor="rgba(2, 14, 28, 0.0)" />
             </radialGradient>
-            <linearGradient id="orb-bezel" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(140, 230, 255, 0.85)" />
-              <stop offset="50%" stopColor="rgba(0, 168, 230, 0.45)" />
-              <stop offset="100%" stopColor="rgba(0, 90, 140, 0.25)" />
-            </linearGradient>
             <filter id="orb-soft-glow" x="-30%" y="-30%" width="160%" height="160%">
               <feGaussianBlur stdDeviation="1.2" />
             </filter>
@@ -74,34 +93,17 @@ export function Orb({ state }: Props) {
           {/* Glow de fundo */}
           <circle cx="200" cy="200" r="195" fill="url(#orb-bg)" />
 
-          {/* Bezel externo grosso (anel principal) */}
-          <circle
-            cx="200"
-            cy="200"
-            r="178"
-            fill="none"
-            stroke="url(#orb-bezel)"
-            strokeWidth="6"
-            className="orb__ring orb__ring--bezel"
-          />
-          <circle
-            cx="200"
-            cy="200"
-            r="178"
-            fill="none"
-            stroke="rgba(0, 212, 255, 0.45)"
-            strokeWidth="0.8"
-          />
-
-          {/* Anel mais fino dentro do bezel */}
-          <circle
-            cx="200"
-            cy="200"
-            r="168"
-            fill="none"
-            stroke="rgba(0, 212, 255, 0.22)"
-            strokeWidth="0.6"
-          />
+          {/* Ondas flutuantes — só visíveis em "speaking" */}
+          <g className="orb__floating-waves" aria-hidden="true">
+            {FLOATING_WAVES.map((w, i) => (
+              <path
+                key={i}
+                d={w.d}
+                className={`orb__fw ${w.cls}`}
+                fill="none"
+              />
+            ))}
+          </g>
 
           {/* Ticks (mostrador) */}
           <g className="orb__ticks">

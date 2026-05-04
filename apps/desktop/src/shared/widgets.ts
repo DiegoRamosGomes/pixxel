@@ -58,8 +58,33 @@ export type YoutubeWidget = {
   url: string;
 };
 
+export type SearchResultsWidget = {
+  kind: 'search-results';
+  query: string;
+  results: Array<{
+    title: string;
+    url: string;
+    snippet: string;
+  }>;
+};
+
+export type StorageWidget = {
+  kind: 'storage';
+  scope: 'single' | 'all';
+  disks: Array<{
+    mount: string;
+    fstype: string;
+    totalBytes: number;
+    usedBytes: number;
+    availBytes: number;
+    usedPercent: number;
+  }>;
+};
+
 export type Widget =
   | WeatherWidget
   | TasksListWidget
   | TaskDetailWidget
-  | YoutubeWidget;
+  | YoutubeWidget
+  | SearchResultsWidget
+  | StorageWidget;

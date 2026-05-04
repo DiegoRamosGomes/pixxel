@@ -5,7 +5,7 @@ const BASE = 'https://www.googleapis.com/youtube/v3';
 
 type SearchItem = {
   id?: { videoId?: string; channelId?: string };
-  snippet?: { title?: string; channelTitle?: string };
+  snippet?: { title?: string; channelTitle?: string; description?: string };
 };
 
 type ChannelItem = {
@@ -100,12 +100,30 @@ async function getLatestFromPlaylist(playlistId: string): Promise<YoutubeResolve
 
 export type YoutubePrefer = 'top' | 'latest' | 'first';
 
+export type YoutubeResolveOptions = {
+  /**
+   * Filtro de duração do YouTube. `medium` (4-20min) é ideal pra conteúdo
+   * educativo e exclui Shorts. `any` deixa passar tudo (default — preserva
+   * comportamento de "tocar música" que pode ser curta).
+   */
+  videoDuration?: 'short' | 'medium' | 'long' | 'any';
+};
+
 /** Resolve uma query do YouTube via API oficial conforme estratégia. */
 export async function resolveYoutube(
   query: string,
   prefer: YoutubePrefer,
+  options: YoutubeResolveOptions = {},
 ): Promise<YoutubeResolved | null> {
   if (!isYoutubeAvailable()) return null;
+  const dur = options.videoDuration ?? 'any';
+  const durParam: Record<string, string> =
+    dur !== 'any' ? { videoDuration: dur } : {};
+
+  // Bias pra resultados em pt-BR. relevanceLanguage + regionCode são hints
+  // (não filtros), então também filtramos pelo idioma do título nos top N
+  // pra reforçar.
+  const ptParams = { relevanceLanguage: 'pt', regionCode: 'BR' };
 
   if (prefer === 'latest') {
     // 1ª: uploads do canal (3 unidades, ordenação real do YouTube)
@@ -117,15 +135,17 @@ export async function resolveYoutube(
         if (v) return v;
       }
     }
-    // 2ª: search.list ordenado por data
+    // 2ª: search.list ordenado por data, filtrando pt
     const data = await fetchJson<{ items: SearchItem[] }>('search', {
       q: query,
       type: 'video',
       part: 'snippet',
       order: 'date',
-      maxResults: '1',
+      maxResults: '5',
+      ...ptParams,
+      ...durParam,
     });
-    return pickItem(data?.items[0]);
+    return pickPortuguese(data?.items) ?? pickItem(data?.items?.[0]);
   }
 
   if (prefer === 'top') {
@@ -134,9 +154,11 @@ export async function resolveYoutube(
       type: 'video',
       part: 'snippet',
       order: 'viewCount',
-      maxResults: '1',
+      maxResults: '5',
+      ...ptParams,
+      ...durParam,
     });
-    return pickItem(data?.items[0]);
+    return pickPortuguese(data?.items) ?? pickItem(data?.items?.[0]);
   }
 
   // first
@@ -144,7 +166,73 @@ export async function resolveYoutube(
     q: query,
     type: 'video',
     part: 'snippet',
-    maxResults: '1',
+    maxResults: '5',
+    ...ptParams,
   });
-  return pickItem(data?.items[0]);
+  return pickPortuguese(data?.items) ?? pickItem(data?.items?.[0]);
+}
+
+/**
+ * Busca top N vídeos em PT-BR pra uma query — usado quando queremos
+ * alternativas (ex: "manda outro vídeo desse tópico"). Aplica mesmos
+ * filtros heurísticos do pickPortuguese.
+ */
+export async function searchYoutubeMany(
+  query: string,
+  options: YoutubeResolveOptions = {},
+  maxResults = 8,
+): Promise<YoutubeResolved[]> {
+  if (!isYoutubeAvailable()) return [];
+  const dur = options.videoDuration ?? 'any';
+  const durParam: Record<string, string> =
+    dur !== 'any' ? { videoDuration: dur } : {};
+  const data = await fetchJson<{ items: SearchItem[] }>('search', {
+    q: query,
+    type: 'video',
+    part: 'snippet',
+    order: 'viewCount',
+    maxResults: String(maxResults),
+    relevanceLanguage: 'pt',
+    regionCode: 'BR',
+    ...durParam,
+  });
+  if (!data?.items) return [];
+  const PT_HINTS = /\b(que|de|para|como|uma|um|é|não|nao|com|em|no|na|da|do|os|as|pra|você|voce)\b/i;
+  const EN_BLOCK = /\b(the|and|with|how to|what is|introduction|crash course)\b/i;
+  return data.items
+    .filter((item) => {
+      const title = item?.snippet?.title ?? '';
+      const desc = item?.snippet?.description ?? '';
+      if (EN_BLOCK.test(title)) return false;
+      return PT_HINTS.test(`${title} ${desc}`);
+    })
+    .map((item) => pickItem(item))
+    .filter((x): x is YoutubeResolved => x !== null);
+}
+
+/**
+ * Heurística pra detectar título em português. Pesa palavras funcionais
+ * comuns em PT (que/de/para/como/uma/é/não/com/em/no/da/do) que dificilmente
+ * aparecem juntas em outros idiomas. Retorna o primeiro item que parece PT.
+ */
+function pickPortuguese(
+  items: SearchItem[] | undefined,
+): YoutubeResolved | null {
+  if (!items || items.length === 0) return null;
+  const PT_HINTS = /\b(que|de|para|como|uma|um|é|não|nao|com|em|no|na|da|do|os|as|pra|você|voce)\b/i;
+  const EN_BLOCK = /\b(the|and|with|how to|what is|introduction|crash course)\b/i;
+  for (const item of items) {
+    const title = item?.snippet?.title ?? '';
+    const desc = item?.snippet?.description ?? '';
+    const blob = `${title} ${desc}`;
+    if (PT_HINTS.test(blob) && !EN_BLOCK.test(title)) {
+      return pickItem(item);
+    }
+  }
+  // Nenhum claramente PT — tenta o primeiro que NÃO seja claramente EN
+  for (const item of items) {
+    const title = item?.snippet?.title ?? '';
+    if (!EN_BLOCK.test(title)) return pickItem(item);
+  }
+  return null;
 }

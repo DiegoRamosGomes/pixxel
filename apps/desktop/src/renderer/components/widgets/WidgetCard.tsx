@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
 import type { Widget } from '../../../shared/widgets.js';
 import { WeatherCard } from './WeatherCard.js';
 import { TasksListCard } from './TasksListCard.js';
 import { TaskDetailCard } from './TaskDetailCard.js';
 import { YoutubeCard } from './YoutubeCard.js';
+import { SearchResultsCard } from './SearchResultsCard.js';
+import { StorageCard } from './StorageCard.js';
+import { useDragHandle } from './useDragHandle.js';
 
 type Props = {
   widget: Widget;
@@ -20,58 +22,19 @@ export function WidgetCard({
   onDismiss,
   onActivate,
 }: Props) {
-  const [pos, setPos] = useState({ x: initialX, y: initialY });
-  const [dragging, setDragging] = useState(false);
-  const dragStateRef = useRef<{
-    startCursorX: number;
-    startCursorY: number;
-    startWidgetX: number;
-    startWidgetY: number;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!dragging) return;
-    const onMove = (e: MouseEvent) => {
-      const s = dragStateRef.current;
-      if (!s) return;
-      setPos({
-        x: s.startWidgetX + (e.clientX - s.startCursorX),
-        y: s.startWidgetY + (e.clientY - s.startCursorY),
-      });
-    };
-    const onUp = () => {
-      setDragging(false);
-      dragStateRef.current = null;
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [dragging]);
-
-  function handleMouseDown(e: React.MouseEvent) {
-    const target = e.target as HTMLElement;
-    // Drag só inicia se o mousedown for no header. Ignora clique no botão close.
-    if (target.closest('.widget-close')) return;
-    if (!target.closest('.widget__head')) return;
-    e.preventDefault();
-    onActivate?.();
-    dragStateRef.current = {
-      startCursorX: e.clientX,
-      startCursorY: e.clientY,
-      startWidgetX: pos.x,
-      startWidgetY: pos.y,
-    };
-    setDragging(true);
-  }
+  const { pos, dragging, handleProps } = useDragHandle({
+    initialX,
+    initialY,
+    headSelector: '.widget__head',
+    ignoreSelector: '.widget-close',
+    onActivate,
+  });
 
   return (
     <div
       className={`widget-wrap${dragging ? ' widget-wrap--dragging' : ''}`}
       style={{ transform: `translate3d(${pos.x}px, ${pos.y}px, 0)` }}
-      onMouseDown={handleMouseDown}
+      {...handleProps}
     >
       <button
         type="button"
@@ -96,5 +59,9 @@ function renderInner(widget: Widget) {
       return <TaskDetailCard data={widget} />;
     case 'youtube':
       return <YoutubeCard data={widget} />;
+    case 'search-results':
+      return <SearchResultsCard data={widget} />;
+    case 'storage':
+      return <StorageCard data={widget} />;
   }
 }

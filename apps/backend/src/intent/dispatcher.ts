@@ -13,7 +13,7 @@ import {
   listMyInProgressTasks,
 } from './clickup.js';
 
-export const SYSTEM_PROMPT = `Você é um assistente pessoal estilo Jarvis em português do Brasil.
+export const SYSTEM_PROMPT = `Você é um assistente pessoal estilo Pixxel em português do Brasil.
 
 Para todo input do usuário, escolha UM dos dois formatos de resposta:
 

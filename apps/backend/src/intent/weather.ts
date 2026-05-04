@@ -5,7 +5,7 @@ type Geo = { latitude: number; longitude: number; city: string; country: string 
 async function lookupGeo(): Promise<Geo | null> {
   try {
     const res = await fetch('https://ipapi.co/json/', {
-      headers: { 'user-agent': 'jarvis-assistant/0.1' },
+      headers: { 'user-agent': 'pixxel-assistant/0.1' },
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {

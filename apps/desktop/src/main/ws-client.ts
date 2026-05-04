@@ -17,8 +17,6 @@ export type WsHooks = {
 
 export class AssistantWsClient {
   private ws: WebSocket | null = null;
-  private reconnectDelay = 1000;
-  private readonly maxDelay = 15_000;
   private readonly sessionId: string;
   private authed = false;
   private closedByUser = false;
@@ -63,7 +61,6 @@ export class AssistantWsClient {
       switch (event.type) {
         case 'hello_ok':
           this.authed = true;
-          this.reconnectDelay = 1000;
           this.emit({ type: 'conn', state: 'open' });
           break;
         case 'assistant_start':
@@ -116,10 +113,6 @@ export class AssistantWsClient {
       this.authed = false;
       this.ws = null;
       this.emit({ type: 'conn', state: 'closed', reason: reason.toString() || `code ${code}` });
-      if (!this.closedByUser) {
-        setTimeout(() => this.connect(), this.reconnectDelay);
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-      }
     });
 
     ws.on('error', (err) => {

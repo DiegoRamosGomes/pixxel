@@ -40,7 +40,7 @@ const PREFIX = () => process.env.CLICKUP_TASK_PREFIX ?? '';
 
 export const isClickupAvailable = (): boolean => Boolean(TOKEN());
 
-async function clickupFetch<T>(
+export async function clickupFetch<T>(
   path: string,
   params: Record<string, string | string[]> = {},
 ): Promise<T | null> {
@@ -74,7 +74,7 @@ async function clickupFetch<T>(
 let teamIdCache: string | null = null;
 let userIdCache: number | null = null;
 
-async function getTeamId(): Promise<string | null> {
+export async function getTeamId(): Promise<string | null> {
   if (teamIdCache) return teamIdCache;
   const data = await clickupFetch<{ teams: Array<{ id: string }> }>('/team');
   const id = data?.teams[0]?.id ?? null;
@@ -82,7 +82,7 @@ async function getTeamId(): Promise<string | null> {
   return id;
 }
 
-async function getUserId(): Promise<number | null> {
+export async function getUserId(): Promise<number | null> {
   if (userIdCache) return userIdCache;
   const data = await clickupFetch<{ user: { id: number } }>('/user');
   const id = data?.user?.id ?? null;

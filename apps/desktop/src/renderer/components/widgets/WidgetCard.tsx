@@ -5,6 +5,8 @@ import { TaskDetailCard } from './TaskDetailCard.js';
 import { YoutubeCard } from './YoutubeCard.js';
 import { SearchResultsCard } from './SearchResultsCard.js';
 import { StorageCard } from './StorageCard.js';
+import { NotificationsCard } from './NotificationsCard.js';
+import { BuildStatusCard } from './BuildStatusCard.js';
 import { useDragHandle } from './useDragHandle.js';
 
 type Props = {
@@ -63,5 +65,9 @@ function renderInner(widget: Widget) {
       return <SearchResultsCard data={widget} />;
     case 'storage':
       return <StorageCard data={widget} />;
+    case 'notifications':
+      return <NotificationsCard data={widget} />;
+    case 'build-status':
+      return <BuildStatusCard data={widget} />;
   }
 }

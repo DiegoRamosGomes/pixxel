@@ -68,6 +68,34 @@ export type SearchResultsWidget = {
   }>;
 };
 
+export type BuildStatusWidget = {
+  kind: 'build-status';
+  provider: 'expo';
+  buildId?: string;
+  appName?: string;
+  platform?: 'ios' | 'android';
+  status: 'started' | 'finished' | 'errored' | 'canceled' | string;
+  buildUrl?: string; // EAS dashboard
+  artifactUrl?: string; // .apk/.ipa direto (só em finished)
+  receivedAt?: number;
+};
+
+export type NotificationsWidget = {
+  kind: 'notifications';
+  source: 'clickup';
+  // Compactos pra UI: cada item vira uma linha clicável.
+  items: Array<{
+    id: string;
+    kind: 'task_assigned' | 'task_comment' | 'mention' | 'chat_message' | 'other';
+    title: string;
+    detail?: string;
+    actor?: string;
+    taskId?: string;
+    taskUrl?: string;
+    date?: string;
+  }>;
+};
+
 export type StorageWidget = {
   kind: 'storage';
   scope: 'single' | 'all';
@@ -87,4 +115,6 @@ export type Widget =
   | TaskDetailWidget
   | YoutubeWidget
   | SearchResultsWidget
-  | StorageWidget;
+  | StorageWidget
+  | NotificationsWidget
+  | BuildStatusWidget;

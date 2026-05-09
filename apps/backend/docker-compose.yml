@@ -1,0 +1,36 @@
+# Stack do pixxel-backend pra VPS.
+# Espelha o padrão dos outros projetos em /var/docker/sites/<nome>/
+#
+# Setup na VPS:
+#   1. mkdir -p /var/docker/sites/pixxel-backend
+#   2. copia este compose + .env (com CLIENT_TOKEN e EXPO_WEBHOOK_SECRET)
+#   3. cria network externa se não existe: `docker network create sites`
+#   4. docker compose up -d --build
+#   5. copia nginx conf pra /var/docker/sites/nginx/sites/
+#   6. recarrega nginx: docker exec nginx nginx -s reload
+#   7. emite cert: certbot --webroot -w /var/www/webroot \
+#        -d pixxel.solutionsdk.duckdns.org
+
+services:
+  pixxel_backend:
+    build:
+      context: ./code          # monorepo sincronizado via rsync (ver DEPLOY.md)
+      dockerfile: apps/backend/Dockerfile
+    container_name: pixxel_backend
+    restart: unless-stopped
+    networks:
+      - email-watcher_default
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/pixxel.db
+      - LOG_LEVEL=info
+      - CLIENT_TOKEN=${CLIENT_TOKEN}
+      - EXPO_WEBHOOK_SECRET=${EXPO_WEBHOOK_SECRET}
+
+networks:
+  email-watcher_default:
+    external: true

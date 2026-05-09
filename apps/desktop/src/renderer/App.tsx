@@ -238,6 +238,16 @@ export function App() {
           if (event.state.kind !== 'speaking') {
             liveTranscriptIdRef.current = {};
           }
+          // Live foi iniciado pelo main (auto-start), não pelo botão. Cria o
+          // player aqui pra garantir que `live_audio` chunks tenham onde tocar.
+          // Sem isso, mensagens "no boot" chegam mas saem mudas.
+          if (
+            (event.state.kind === 'connecting' || event.state.kind === 'ready') &&
+            !playerRef.current
+          ) {
+            playerRef.current = new PcmStreamPlayer(24000);
+            void playerRef.current.resume();
+          }
           if (event.state.kind === 'closed' || event.state.kind === 'error' || event.state.kind === 'idle') {
             void teardownLiveLocal();
           }

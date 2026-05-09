@@ -1,34 +1,26 @@
+// Conexão WS pro desktop. Apenas auth (hello + token) + webhook_ack.
+// Sem chat/dispatcher — esse backend é só hub de webhooks agora.
+
 import type { WebSocket } from '@fastify/websocket';
-import { randomUUID } from 'node:crypto';
-import {
-  ClientEventSchema,
-  type ServerEvent,
-} from '@assistant/shared';
+import { ClientEventSchema, type ServerEvent } from '@assistant/shared';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import {
-  appendAssistantMessage,
-  appendUserMessage,
-  ensureSession,
-  loadHistory,
-} from '../memory/db.js';
-import { dispatch, SYSTEM_PROMPT } from '../intent/dispatcher.js';
-import type { ChatMessage } from '../llm/client.js';
+  registerClient,
+  unregisterClient,
+  drainPendingToClient,
+  ackWebhookEvent,
+} from './hub.js';
 
 function send(socket: WebSocket, event: ServerEvent): void {
   socket.send(JSON.stringify(event));
 }
 
-type ConnState = {
-  authed: boolean;
-  sessionId: string | null;
-};
-
 export function handleConnection(socket: WebSocket): void {
-  const state: ConnState = { authed: false, sessionId: null };
+  let authed = false;
   logger.info('ws client connected');
 
-  socket.on('message', async (raw: Buffer) => {
+  socket.on('message', (raw: Buffer) => {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw.toString());
@@ -54,97 +46,43 @@ export function handleConnection(socket: WebSocket): void {
         socket.close(1008, 'unauthorized');
         return;
       }
-      state.authed = true;
-      state.sessionId = event.sessionId;
-      ensureSession(event.sessionId);
+      authed = true;
       send(socket, { type: 'hello_ok', sessionId: event.sessionId });
-      logger.info({ sessionId: event.sessionId }, 'ws client authed');
+      logger.info({ sessionId: event.sessionId }, 'ws authed');
+      registerClient(socket);
+      // Drena pendentes assíncrono pra não bloquear o hello_ok.
+      setImmediate(() => drainPendingToClient(socket));
       return;
     }
 
-    if (!state.authed || !state.sessionId) {
+    if (!authed) {
       send(socket, { type: 'error', code: 'unauthorized', message: 'send hello first' });
       return;
     }
 
+    if (event.type === 'webhook_ack') {
+      ackWebhookEvent(event.eventId);
+      return;
+    }
+
+    // user_message: removido da nova arquitetura. Backend não fala mais com LLM.
     if (event.type === 'user_message') {
-      if (event.sessionId !== state.sessionId) {
-        send(socket, {
-          type: 'error',
-          code: 'session_mismatch',
-          message: 'sessionId differs from hello',
-        });
-        return;
-      }
-
-      appendUserMessage(state.sessionId, event.text, event.source);
-
-      const history = loadHistory(state.sessionId);
-      const messages: ChatMessage[] = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...history,
-      ];
-
-      const messageId = randomUUID();
-
-      try {
-        const outcome = await dispatch(messages, event.text, {
-          onChatStart: (model) => {
-            send(socket, { type: 'assistant_start', messageId, model });
-          },
-          onChatDelta: (delta) => {
-            send(socket, { type: 'assistant_chunk', messageId, delta });
-          },
-          emitSupportMessage: (text, model) => {
-            const supportId = randomUUID();
-            send(socket, { type: 'assistant_start', messageId: supportId, model });
-            send(socket, { type: 'assistant_chunk', messageId: supportId, delta: text });
-            send(socket, {
-              type: 'assistant_done',
-              messageId: supportId,
-              fullText: text,
-            });
-          },
-        });
-
-        if (outcome.kind === 'chat') {
-          appendAssistantMessage(state.sessionId, outcome.fullText, outcome.model);
-          send(socket, {
-            type: 'assistant_done',
-            messageId,
-            fullText: outcome.fullText,
-          });
-        } else {
-          // Comando: persiste descrição amigável no histórico pra contexto futuro
-          appendAssistantMessage(
-            state.sessionId,
-            `[ação executada: ${outcome.spokenLabel}]`,
-            outcome.source === 'regex' ? 'regex' : 'llm',
-          );
-          send(socket, {
-            type: 'assistant_command',
-            messageId,
-            command: outcome.command,
-            spokenLabel: outcome.spokenLabel,
-            source: outcome.source,
-          });
-        }
-      } catch (err) {
-        logger.error({ err }, 'dispatch failed');
-        send(socket, {
-          type: 'error',
-          code: 'dispatch_failed',
-          message: err instanceof Error ? err.message : 'unknown',
-        });
-      }
+      send(socket, {
+        type: 'error',
+        code: 'unsupported',
+        message: 'user_message não é mais suportado neste backend',
+      });
+      return;
     }
   });
 
   socket.on('close', () => {
-    logger.info({ sessionId: state.sessionId }, 'ws client disconnected');
+    logger.info('ws client disconnected');
+    unregisterClient(socket);
   });
 
   socket.on('error', (err: Error) => {
     logger.warn({ err }, 'ws error');
+    unregisterClient(socket);
   });
 }

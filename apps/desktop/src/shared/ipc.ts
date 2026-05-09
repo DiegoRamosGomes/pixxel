@@ -162,6 +162,8 @@ export type AssistantApi = {
   handMouseDown: (button: 1 | 2 | 3) => void;
   handMouseUp: (button: 1 | 2 | 3) => void;
   handMouseScroll: (direction: 'up' | 'down', ticks?: number) => void;
+  /** Pede pro Gemini explicar uma task ClickUp (chama clickup_explain_task). */
+  explainClickupTask: (taskId: string) => void;
   /** Publica imagem/vídeo no Instagram. file vem como bytes + nome (ext define tipo).
    *  shareToFeed: para Reels, duplica no feed principal (default false). */
   instagramPublish: (

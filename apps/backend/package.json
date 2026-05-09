@@ -16,9 +16,7 @@
     "better-sqlite3": "^11.5.0",
     "dotenv": "^16.4.5",
     "fastify": "^5.1.0",
-    "openai": "^4.73.0",
     "pino": "^9.5.0",
-    "youtube-sr": "^4.3.11",
     "zod": "^3.23.8"
   },
   "devDependencies": {

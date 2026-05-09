@@ -1,7 +1,10 @@
+// SQLite simples pra fila de webhook events.
+// Schema: cada evento recebido fica até ser entregue (delivered_at != null).
+// Ao reconectar, o desktop drena a fila ordenada por received_at.
+
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -13,69 +16,82 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS sessions (
+  CREATE TABLE IF NOT EXISTS webhook_events (
     id TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL
+    provider TEXT NOT NULL,
+    event_kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    delivered_at INTEGER,
+    retry_count INTEGER NOT NULL DEFAULT 0
   );
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
-    content TEXT NOT NULL,
-    source TEXT CHECK (source IN ('voice', 'text')),
-    model TEXT,
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_messages_session_created
-    ON messages(session_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_webhook_pending
+    ON webhook_events(delivered_at, received_at);
 `);
 
 logger.info({ dbPath }, 'sqlite ready');
 
+export type WebhookEventRow = {
+  id: string;
+  provider: string;
+  event_kind: string;
+  payload: string;
+  received_at: number;
+  delivered_at: number | null;
+  retry_count: number;
+};
+
 const stmts = {
-  upsertSession: db.prepare(
-    `INSERT OR IGNORE INTO sessions (id, created_at) VALUES (?, ?)`,
+  insert: db.prepare(
+    `INSERT INTO webhook_events (id, provider, event_kind, payload, received_at)
+     VALUES (?, ?, ?, ?, ?)`,
   ),
-  insertMessage: db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, source, model, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  listPending: db.prepare(
+    `SELECT * FROM webhook_events WHERE delivered_at IS NULL ORDER BY received_at ASC`,
   ),
-  listMessages: db.prepare(
-    `SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC`,
+  markDelivered: db.prepare(
+    `UPDATE webhook_events SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL`,
+  ),
+  incrementRetry: db.prepare(
+    `UPDATE webhook_events SET retry_count = retry_count + 1 WHERE id = ?`,
+  ),
+  // Limpeza opcional: eventos entregues há mais de N dias podem ser purgados.
+  purgeOldDelivered: db.prepare(
+    `DELETE FROM webhook_events WHERE delivered_at IS NOT NULL AND delivered_at < ?`,
   ),
 };
 
-export function ensureSession(sessionId: string): void {
-  stmts.upsertSession.run(sessionId, Date.now());
+export function insertWebhookEvent(input: {
+  id: string;
+  provider: string;
+  eventKind: string;
+  payload: unknown;
+}): void {
+  stmts.insert.run(
+    input.id,
+    input.provider,
+    input.eventKind,
+    JSON.stringify(input.payload),
+    Date.now(),
+  );
 }
 
-export function appendUserMessage(
-  sessionId: string,
-  content: string,
-  source: 'voice' | 'text',
-): string {
-  const id = randomUUID();
-  stmts.insertMessage.run(id, sessionId, 'user', content, source, null, Date.now());
-  return id;
+export function listPendingWebhookEvents(): WebhookEventRow[] {
+  return stmts.listPending.all() as WebhookEventRow[];
 }
 
-export function appendAssistantMessage(
-  sessionId: string,
-  content: string,
-  model: string,
-): string {
-  const id = randomUUID();
-  stmts.insertMessage.run(id, sessionId, 'assistant', content, null, model, Date.now());
-  return id;
+export function markWebhookDelivered(id: string): void {
+  stmts.markDelivered.run(Date.now(), id);
 }
 
-export function loadHistory(
-  sessionId: string,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-  return stmts.listMessages.all(sessionId) as Array<{
-    role: 'system' | 'user' | 'assistant';
-    content: string;
-  }>;
+export function incrementWebhookRetry(id: string): void {
+  stmts.incrementRetry.run(id);
+}
+
+/** Limpa eventos entregues há mais de `daysAgo` dias. Chamar periodicamente. */
+export function purgeOldDelivered(daysAgo = 30): void {
+  const cutoff = Date.now() - daysAgo * 24 * 60 * 60 * 1000;
+  const r = stmts.purgeOldDelivered.run(cutoff);
+  if (r.changes > 0) logger.info({ removed: r.changes }, 'purged old webhooks');
 }

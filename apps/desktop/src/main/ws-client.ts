@@ -6,6 +6,14 @@ import { executeCommand } from './executor.js';
 
 type Emit = (event: RendererEvent) => void;
 
+export type WebhookEventData = {
+  eventId: string;
+  provider: string;
+  eventKind: string;
+  receivedAt: number;
+  data: Record<string, unknown>;
+};
+
 export type WsHooks = {
   /** Chamado a cada `assistant_chunk` antes de emitir pro renderer. */
   onAssistantTextChunk?: (delta: string) => void;
@@ -13,6 +21,9 @@ export type WsHooks = {
   onAssistantTextEnd?: () => void;
   /** Chamado pra cada comando recebido — útil pra falar o spokenLabel. */
   onAssistantCommandLabel?: (label: string) => void;
+  /** Webhook recebido do backend (Expo build, etc). Cliente deve processar
+   *  e mandar `webhook_ack` quando concluir o handling visual/de fala. */
+  onWebhookEvent?: (event: WebhookEventData) => void;
 };
 
 export class AssistantWsClient {
@@ -106,6 +117,20 @@ export class AssistantWsClient {
           });
           break;
         }
+        case 'webhook_event': {
+          this.hooks.onWebhookEvent?.({
+            eventId: event.eventId,
+            provider: event.provider,
+            eventKind: event.eventKind,
+            receivedAt: event.receivedAt,
+            data: event.data,
+          });
+          // Ack imediato — o handling visual/voz é fire-and-forget.
+          // Se quisermos garantia at-least-once de UI, mover ack pra após
+          // emit do widget. Mas o widget é local, não falha.
+          this.ack(event.eventId);
+          break;
+        }
       }
     });
 
@@ -136,6 +161,16 @@ export class AssistantWsClient {
       source: 'text',
     };
     this.ws.send(JSON.stringify(event));
+  }
+
+  private ack(eventId: string): void {
+    if (!this.ws || !this.authed) return;
+    const event: ClientEvent = { type: 'webhook_ack', eventId };
+    try {
+      this.ws.send(JSON.stringify(event));
+    } catch (err) {
+      console.warn('[ws] ack falhou:', err);
+    }
   }
 
   close(): void {

@@ -27,6 +27,7 @@ import {
   typeText,
 } from './desktop-control.js';
 import { buildMorningBriefing } from './briefing.js';
+import { pollClickupNotificationsOnce } from './clickup-notifications.js';
 import { openProject } from './projects.js';
 import { listWorkLogs, readWorkLog } from './work-log-view.js';
 import { isWebSearchAvailable, searchWeb, formatSearchForVoice } from './web-search.js';
@@ -377,6 +378,45 @@ export async function executeIntegration(
         widgets: r.widgets,
         widgetDelaysMs: r.widgetDelaysMs,
         meta: r.meta,
+      };
+    }
+
+    case 'restart_app': {
+      // Não dá pra "relaunch" do main process diretamente daqui (esta função
+      // roda no escopo de integrations e não tem acesso a app/electron).
+      // Marcamos via flag no estado e o main reinicia ao receber um sinal.
+      // Usa app.relaunch() + app.exit() pelo main via sinalização.
+      // Implementação: jogamos um SIGTERM controlado por env var que o main
+      // intercepta. Por ora, simples: o handler em main/index.ts faz o
+      // relaunch quando vê esse evento; aqui só retornamos texto.
+      // Sinaliza via globalThis pra evitar imports circulares.
+      const w = globalThis as { __pixxelRestart?: () => void };
+      if (typeof w.__pixxelRestart === 'function') {
+        // pequeno delay pra Gemini terminar de falar
+        setTimeout(() => w.__pixxelRestart!(), 1500);
+      }
+      return { ok: true, text: 'Reiniciando.' };
+    }
+
+    case 'check_clickup_notifications': {
+      const batch = await pollClickupNotificationsOnce();
+      if (!batch) {
+        return {
+          ok: true,
+          text: 'Nada de novo no ClickUp desde a última checagem. Tudo em dia.',
+        };
+      }
+      return {
+        ok: true,
+        text: batch.summary,
+        widgets: [
+          {
+            kind: 'notifications',
+            source: 'clickup',
+            items: batch.items,
+          },
+        ],
+        widgetDelaysMs: [0],
       };
     }
 
@@ -937,6 +977,8 @@ export const INTEGRATION_NAMES = new Set<string>([
   'instagram_post_insights',
   'open_project',
   'morning_briefing',
+  'check_clickup_notifications',
+  'restart_app',
   'list_work_logs',
   'read_work_log',
   'web_search',

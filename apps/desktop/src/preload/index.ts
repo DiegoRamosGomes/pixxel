@@ -30,6 +30,8 @@ const api: AssistantApi = {
   handMouseUp: (button) => ipcRenderer.send('assistant:hand-mouse-up', button),
   handMouseScroll: (direction, ticks) =>
     ipcRenderer.send('assistant:hand-mouse-scroll', direction, ticks ?? 1),
+  explainClickupTask: (taskId) =>
+    ipcRenderer.send('assistant:explain-clickup-task', taskId),
   instagramPublish: (fileBytes, fileName, caption, shareToFeed) =>
     ipcRenderer.invoke(
       'assistant:instagram-publish',

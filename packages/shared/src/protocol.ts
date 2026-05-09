@@ -19,9 +19,16 @@ export const UserMessageSchema = z.object({
 });
 export type UserMessage = z.infer<typeof UserMessageSchema>;
 
+export const WebhookAckSchema = z.object({
+  type: z.literal('webhook_ack'),
+  eventId: z.string().min(1),
+});
+export type WebhookAck = z.infer<typeof WebhookAckSchema>;
+
 export const ClientEventSchema = z.discriminatedUnion('type', [
   ClientHelloSchema,
   UserMessageSchema,
+  WebhookAckSchema,
 ]);
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
@@ -68,6 +75,19 @@ export const ServerErrorSchema = z.object({
 });
 export type ServerError = z.infer<typeof ServerErrorSchema>;
 
+// Webhook que chegou no backend e tá sendo entregue pro desktop. O cliente
+// deve responder com `webhook_ack` pra marcar como entregue (sem ack, o
+// backend re-envia na próxima reconexão).
+export const WebhookEventSchema = z.object({
+  type: z.literal('webhook_event'),
+  eventId: z.string(),
+  provider: z.string(), // 'expo', 'github', etc.
+  eventKind: z.string(), // 'build.started', 'build.finished', etc.
+  receivedAt: z.number(),
+  data: z.record(z.string(), z.unknown()), // payload normalizado pro renderer
+});
+export type WebhookEvent = z.infer<typeof WebhookEventSchema>;
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   ServerHelloOkSchema,
   AssistantStartSchema,
@@ -75,5 +95,6 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   AssistantDoneSchema,
   AssistantCommandSchema,
   ServerErrorSchema,
+  WebhookEventSchema,
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;

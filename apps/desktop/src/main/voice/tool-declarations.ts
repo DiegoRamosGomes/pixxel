@@ -882,6 +882,30 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'restart_app',
+    description:
+      'Reinicia o Pixxel (fecha + abre de novo). Use quando o usuário pedir ' +
+      'pra reiniciar / restartar / reiniciar o assistente / "reinicia ai".\n' +
+      'A reinicialização limpa pollers, conexão Live e estado do main process. ' +
+      'Antes de chamar a tool, fale UMA frase curta tipo "reiniciando" — depois ' +
+      'a janela vai fechar e abrir de novo automaticamente.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'check_clickup_notifications',
+    description:
+      'Força uma checagem AGORA das notificações do ClickUp do usuário ' +
+      '(tasks atribuídas, comentários em tasks dele, menções, mensagens). ' +
+      'O poller automático já roda a cada 5min em background, mas use esta ' +
+      'tool quando o usuário pedir explicitamente pra checar.\n' +
+      'GATILHOS: "tem alguma notificação?", "tem mensagem nova?", "checa o ' +
+      'clickup", "alguém me marcou em alguma coisa?", "tem task nova pra ' +
+      'mim?", "alguma novidade do trabalho?".\n' +
+      'Retorna texto pronto pra falar com resumo. Se não houver nada novo ' +
+      'desde o último poll, retorna mensagem indicando que está tudo em dia.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'search_memory',
     description:
       'Busca SEMÂNTICA na memória persistente (~/pixxel/memory/) — encontra ' +

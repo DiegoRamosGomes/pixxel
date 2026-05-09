@@ -33,6 +33,10 @@ import {
   markBriefingDoneToday,
 } from './integrations/briefing.js';
 import {
+  startClickupNotificationsPoller,
+  type NotificationsBatch,
+} from './integrations/clickup-notifications.js';
+import {
   isXdotoolAvailable,
   getScreenSize as getHandMouseScreenSize,
   moveMouseFast,
@@ -495,9 +499,124 @@ function armPermissionFallback(answer: 'yes' | 'no', source: 'user-voice' | 'mod
   }, delayMs);
 }
 
+// Lista de cleanups dos pollers de longa duração. Chamados em
+// 'window-all-closed' pra evitar setIntervals órfãos que tentam mandar IPC
+// pra webContents destruído ("Object has been destroyed").
+const shutdownHandlers: Array<() => void> = [];
+
+// Frases de webhook pendentes que chegaram enquanto Live ainda não tava
+// 'ready'. Flushadas agregadas quando Live conecta — evita perder fala e
+// já resolve o "muitas notificações ao reconectar" naturalmente.
+const pendingWebhookPhrases: string[] = [];
+
+// Trata um webhook que chegou via backend WS. Mapeia provider/eventKind pro
+// widget correto + frase pro Gemini falar. Hoje cobre só Expo build, mas
+// estrutura é genérica pra outros providers no futuro.
+function handleWebhookEvent(wh: {
+  eventId: string;
+  provider: string;
+  eventKind: string;
+  receivedAt: number;
+  data: Record<string, unknown>;
+}): void {
+  console.log(
+    `[webhook] recebido: ${wh.provider}/${wh.eventKind} id=${wh.eventId}`,
+  );
+  if (wh.provider === 'expo') {
+    handleExpoBuildEvent(wh);
+    return;
+  }
+  console.warn(`[webhook] provider desconhecido: ${wh.provider}`);
+}
+
+function handleExpoBuildEvent(wh: {
+  eventId: string;
+  eventKind: string;
+  receivedAt: number;
+  data: Record<string, unknown>;
+}): void {
+  const d = wh.data;
+  const status = String(d.status ?? '');
+  const platform = (d.platform as 'ios' | 'android' | undefined) ?? undefined;
+  const appName = typeof d.appName === 'string' ? d.appName : undefined;
+  const buildId = typeof d.buildId === 'string' ? d.buildId : undefined;
+  const buildUrl = typeof d.buildUrl === 'string' ? d.buildUrl : undefined;
+  const artifactUrl = typeof d.artifactUrl === 'string' ? d.artifactUrl : undefined;
+
+  // Frase pro Gemini falar dependendo do status
+  const platLabel = platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : '';
+  const appLabel = appName ?? 'seu app';
+  let phrase = '';
+  if (wh.eventKind === 'expo.build.started') {
+    phrase = `Build do ${appLabel}${platLabel ? ' pra ' + platLabel : ''} começou. Pode ir se preparando pra testar.`;
+  } else if (wh.eventKind === 'expo.build.finished') {
+    phrase = `Build do ${appLabel}${platLabel ? ' pra ' + platLabel : ''} terminou com sucesso.`;
+  } else if (wh.eventKind === 'expo.build.errored') {
+    phrase = `Build do ${appLabel}${platLabel ? ' pra ' + platLabel : ''} falhou.`;
+  } else if (wh.eventKind === 'expo.build.canceled') {
+    phrase = `Build do ${appLabel} foi cancelado.`;
+  } else {
+    phrase = `Atualização de build do ${appLabel}: ${status}.`;
+  }
+
+  // Live pode não estar pronto ainda (boot do app, reconnect). Bufferiza
+  // a frase e flusha quando Live entrar em 'ready'.
+  enqueueWebhookSpeech(phrase);
+
+  emit({
+    type: 'widget',
+    id: randomUUID(),
+    widget: {
+      kind: 'build-status',
+      provider: 'expo',
+      buildId,
+      appName,
+      platform,
+      status: (status || 'unknown') as 'started' | 'finished' | 'errored' | 'canceled' | string,
+      buildUrl,
+      artifactUrl,
+      receivedAt: wh.receivedAt,
+    },
+    ttlMs: 60_000 * 60, // 1h na tela
+  });
+}
+
+/** Adiciona uma frase pra ser falada quando Live estiver pronto. Se já
+ *  estiver ready, fala imediato. Senão, fica na buffer. */
+function enqueueWebhookSpeech(phrase: string): void {
+  pendingWebhookPhrases.push(phrase);
+  const liveReady = liveStateKind === 'ready' || liveStateKind === 'speaking';
+  if (live && liveReady) flushPendingWebhookPhrases();
+}
+
+/** Junta todas as frases pendentes numa única instrução pro Gemini. */
+function flushPendingWebhookPhrases(): void {
+  if (pendingWebhookPhrases.length === 0) return;
+  if (!live || liveStateKind !== 'ready') return;
+  const phrases = pendingWebhookPhrases.splice(0);
+  let body: string;
+  if (phrases.length === 1) {
+    body = phrases[0];
+  } else {
+    body =
+      `Tem ${phrases.length} novidades de build acumuladas: ` +
+      phrases.map((p, i) => `${i + 1}) ${p}`).join(' ');
+  }
+  live.sendText(
+    `[evento interno — não é fala do usuário] Avise o usuário em frase ` +
+      `natural e curta sobre os builds abaixo, sem chamar tool e sem ` +
+      `adicionar detalhes. Conteúdo:\n\n${body}`,
+  );
+  console.log(`[webhook] flushed ${phrases.length} pending phrase(s) → Gemini`);
+}
+
 function emit(event: RendererEvent): void {
   if (event.type === 'conn') lastConn = event;
-  mainWindow?.webContents.send('assistant:event', event);
+  // Guard contra webContents destruído (acontece durante shutdown se algum
+  // poller ainda fizer um último tick antes de cancelar).
+  const wc = mainWindow?.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  wc.send('assistant:event', event);
 }
 
 function createWindow(): void {
@@ -520,6 +639,20 @@ function createWindow(): void {
   });
 
   mainWindow.maximize();
+
+  // Garantia de shutdown limpo: quando a janela morre, força exit imediato
+  // depois de cancelar pollers. Sem isso o main process pode ficar pendurado
+  // por causa de WebSockets/IMAP/child_process abertos.
+  mainWindow.on('closed', () => {
+    console.log('[shutdown] mainWindow closed — encerrando');
+    mainWindow = null;
+    shutdownAll();
+    // Pequeno delay pra logs flushearem antes de exit hard.
+    setTimeout(() => {
+      console.log('[shutdown] app.exit(0)');
+      app.exit(0);
+    }, 200);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -594,34 +727,42 @@ app.whenReady().then(async () => {
   }
 
   // Métricas de sistema pra sidebar (CPU + memória). Roda enquanto o app
-  // tá vivo, broadcast cada 1.5s.
-  startSystemMetrics((m) => {
-    emit({
-      type: 'system_metrics',
-      cpuPercent: m.cpuPercent,
-      memUsedBytes: m.memUsedBytes,
-      memTotalBytes: m.memTotalBytes,
-    });
-  });
+  // tá vivo, broadcast cada 5s. Cancel registrado pra shutdown limpo.
+  shutdownHandlers.push(
+    startSystemMetrics((m) => {
+      emit({
+        type: 'system_metrics',
+        cpuPercent: m.cpuPercent,
+        memUsedBytes: m.memUsedBytes,
+        memTotalBytes: m.memTotalBytes,
+      });
+    }),
+  );
 
-  // Top processos (CPU + memória) — poll mais lento (4s) por causa do spawn.
-  startTopProcesses((s) => {
-    emit({ type: 'top_processes', topCpu: s.topCpu, topMem: s.topMem });
-  });
+  // Top processos (CPU + memória) — poll mais lento (8s) por causa do spawn.
+  shutdownHandlers.push(
+    startTopProcesses((s) => {
+      emit({ type: 'top_processes', topCpu: s.topCpu, topMem: s.topMem });
+    }),
+  );
 
   // WiFi (nmcli) — polling lento, raramente muda.
-  startWifiPoll((w) => {
-    emit({ type: 'wifi_info', ssid: w.ssid, signal: w.signal });
-  });
+  shutdownHandlers.push(
+    startWifiPoll((w) => {
+      emit({ type: 'wifi_info', ssid: w.ssid, signal: w.signal });
+    }),
+  );
 
-  // Banda de rede (/proc/net/dev) — diff a cada 1.5s.
-  startNetworkPoll((s) => {
-    emit({
-      type: 'network_bw',
-      rxBytesPerSec: s.rxBytesPerSec,
-      txBytesPerSec: s.txBytesPerSec,
-    });
-  });
+  // Banda de rede (/proc/net/dev).
+  shutdownHandlers.push(
+    startNetworkPoll((s) => {
+      emit({
+        type: 'network_bw',
+        rxBytesPerSec: s.rxBytesPerSec,
+        txBytesPerSec: s.txBytesPerSec,
+      });
+    }),
+  );
 
   // Backfill dos últimos 100 emails na primeira execução — só pra busca
   // semântica funcionar com histórico. Roda em background, não bloqueia.
@@ -649,8 +790,9 @@ app.whenReady().then(async () => {
   // Email poller — IMAP a cada 5min. Quando achar importante:
   //   1) fala via Live (se ativa)
   //   2) manda WhatsApp via CallMeBot (se configurado) — chega no celular.
-  startEmailPoller({
-    onImportant: (emails) => {
+  shutdownHandlers.push(
+    startEmailPoller({
+      onImportant: (emails) => {
       const summary = formatImportantSummary(emails, emails.length);
       console.log(`[email] ${emails.length} importante(s) detectado(s)`);
 
@@ -678,7 +820,42 @@ app.whenReady().then(async () => {
         );
       }
     },
-  });
+  }),
+  );
+
+  // Poller de notificações ClickUp (a cada 5min — política da empresa não
+  // permite webhooks). Cobre tasks atribuídas, comments e menções via
+  // notifications API. Resumo agregado pro Gemini falar + widget.
+  shutdownHandlers.push(
+    startClickupNotificationsPoller({
+    onBatch: (batch: NotificationsBatch) => {
+      console.log(
+        `[clickup-notif] batch: ${batch.items.length} item(s) — "${batch.summary}"`,
+      );
+      const liveReady = liveStateKind === 'ready' || liveStateKind === 'speaking';
+      if (live && liveReady) {
+        live.sendText(
+          `[evento interno — não é fala do usuário] Notificações novas no ` +
+            `ClickUp. Avise o usuário em UMA frase curta e natural usando ` +
+            `EXATAMENTE o resumo abaixo (pode reformular um pouco mas não ` +
+            `adicione detalhes nem chame tools).\n\n${batch.summary}`,
+        );
+      }
+      // Widget — emite junto pra UI mostrar lista detalhada.
+      const widgetId = randomUUID();
+      emit({
+        type: 'widget',
+        id: widgetId,
+        widget: {
+          kind: 'notifications',
+          source: 'clickup',
+          items: batch.items,
+        },
+        ttlMs: 60_000 * 30, // 30min na tela
+      });
+    },
+  }),
+  );
 
   // App local — autoriza mic/audio sem prompt. Sem isso, getUserMedia
   // no renderer falha silenciosamente e a sessão Live cai em 1006.
@@ -723,6 +900,9 @@ app.whenReady().then(async () => {
         },
         onAssistantCommandLabel: (label) => {
           if (tts?.isEnabled()) tts.enqueue(label);
+        },
+        onWebhookEvent: (whEvent) => {
+          handleWebhookEvent(whEvent);
         },
       });
       wsClient.connect();
@@ -840,6 +1020,22 @@ app.whenReady().then(async () => {
     },
   );
 
+  // User clicou numa notificação ClickUp → pede pro Gemini explicar a task.
+  // Tool clickup_explain_task já retorna texto pra fala + widget task-detail.
+  ipcMain.on('assistant:explain-clickup-task', (_e, taskId: string) => {
+    if (!live || !live.isOpen()) {
+      console.warn('[ipc] explain-clickup-task: live não disponível');
+      return;
+    }
+    const sanitized = String(taskId).replace(/[^A-Za-z0-9-]/g, '');
+    if (!sanitized) return;
+    live.sendText(
+      `[evento interno — não é fala do usuário] Usuário clicou na notificação ` +
+        `da task ${sanitized}. Use a tool clickup_explain_task com taskId="${sanitized}" ` +
+        `e fale sobre a task de forma natural.`,
+    );
+  });
+
   ipcMain.on('assistant:window-close', () => mainWindow?.close());
   ipcMain.on('assistant:window-minimize', () => mainWindow?.minimize());
   ipcMain.on('assistant:window-maximize-toggle', () => {
@@ -944,6 +1140,9 @@ app.whenReady().then(async () => {
             flushPendingAnnouncement();
           }
           if (state.kind === 'ready') {
+            // Flush das falas de webhook que chegaram durante boot/reconnect.
+            // Pequeno delay pra dar prioridade pro briefing matinal se houver.
+            setTimeout(() => flushPendingWebhookPhrases(), 500);
             // Pós-restart com --auto-test (argv ou env): dispacha validação
             // automática uma vez por boot.
             const autoTestRequested =
@@ -2037,11 +2236,58 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('window-all-closed', () => {
+// Hook usado pelo handler da tool `restart_app` (escopo integrations).
+// Encerra tudo limpo e relança o app — funciona com `npm run dev` também
+// (electron-vite reabre quando o main process é relaunched).
+(globalThis as { __pixxelRestart?: () => void }).__pixxelRestart = () => {
+  console.log('[restart] disparado via tool — relaunching');
+  shutdownAll();
+  app.relaunch();
+  app.exit(0);
+};
+
+function shutdownAll(): void {
+  // Cancela todos pollers (sysmetrics, netbw, top-procs, wifi, email,
+  // clickup-notif). Sem isso, setIntervals continuam disparando após
+  // a janela morrer e batem em webContents destruído.
+  for (const cancel of shutdownHandlers) {
+    try {
+      cancel();
+    } catch (err) {
+      console.warn('[shutdown] handler falhou:', err);
+    }
+  }
+  shutdownHandlers.length = 0;
   wsClient?.close();
   tts?.cancel();
   live?.stop();
   void claude?.cancel();
   claudeUsage?.stop();
-  if (process.platform !== 'darwin') app.quit();
+  // Cancela reconnect agendado (cancelLiveReconnect é local a whenReady).
+  if (liveReconnectTimer) {
+    clearTimeout(liveReconnectTimer);
+    liveReconnectTimer = null;
+  }
+  liveDesiredActive = false;
+  stopHandMouse();
+}
+
+app.on('window-all-closed', () => {
+  shutdownAll();
+  if (process.platform !== 'darwin') {
+    // app.quit() aguarda before-quit/will-quit e pode ficar pendurado se
+    // alguma promise async (ws Gemini Live, IMAP, child process) segurar
+    // o event loop. Fallback: força exit em 1s se ainda estiver vivo.
+    app.quit();
+    setTimeout(() => {
+      console.warn('[shutdown] app.quit não completou, forçando exit');
+      app.exit(0);
+    }, 1000);
+  }
+});
+
+// Belt-and-suspenders: se app.quit() for chamado por outro caminho (Cmd+Q,
+// SIGTERM, etc) sem passar por window-all-closed, ainda fechamos tudo.
+app.on('before-quit', () => {
+  shutdownAll();
 });

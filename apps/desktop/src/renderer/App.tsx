@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ClaudeQuotaSnapshot,
   ClaudeSessionStatus,
   ConnState,
   LiveState,
@@ -102,6 +103,7 @@ export function App() {
   const [rxHistory, setRxHistory] = useState<number[]>([]);
   const [txHistory, setTxHistory] = useState<number[]>([]);
   const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionViewLocal[]>([]);
+  const [claudeQuota, setClaudeQuota] = useState<ClaudeQuotaSnapshot | null>(null);
   const orbPaneRef = useRef<HTMLDivElement>(null);
   const micRef = useRef<MicCaptureHandle | null>(null);
   const playerRef = useRef<PcmStreamPlayer | null>(null);
@@ -413,6 +415,9 @@ export function App() {
           }, 30_000);
           break;
         }
+        case 'claude_quota_update':
+          setClaudeQuota(event.quota);
+          break;
         case 'claude_sessions_snapshot':
           // Merge: preserva chunks/finalText de sessões já em state, mas adiciona
           // novas (do snapshot inicial pós-boot: paused/crashed/awaiting do disco).
@@ -700,6 +705,7 @@ export function App() {
         netBw={netBw}
         rxHistory={rxHistory}
         txHistory={txHistory}
+        claudeQuota={claudeQuota}
       />
       <header>
         <div className="brand">

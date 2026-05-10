@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react';
+import type { ClaudeQuotaSnapshot } from '../../shared/ipc.js';
 import { Sparkline } from './Sparkline.js';
 
 export type SystemMetricsSnapshot = {
@@ -22,6 +23,7 @@ type Props = {
   netBw: { rx: number; tx: number };
   rxHistory: number[];
   txHistory: number[];
+  claudeQuota: ClaudeQuotaSnapshot | null;
 };
 
 function fmtBps(bps: number): string {
@@ -98,6 +100,7 @@ function SidebarInner({
   netBw,
   rxHistory,
   txHistory,
+  claudeQuota,
 }: Props) {
   return (
     <aside className="sidebar">
@@ -154,6 +157,8 @@ function SidebarInner({
         </div>
       </div>
 
+      <ClaudeQuotaSection quota={claudeQuota} />
+
       <div className="sidebar__top-grid">
         <div className="sidebar__section">
           <div className="sidebar__section-title">TOP CPU</div>
@@ -197,6 +202,49 @@ function SidebarInner({
 }
 
 export const Sidebar = memo(SidebarInner);
+
+function ClaudeQuotaSection({ quota }: { quota: ClaudeQuotaSnapshot | null }) {
+  if (!quota) {
+    return (
+      <div className="claude-card claude-card--empty">
+        <span className="claude-card__label">CLAUDE</span>
+        <span className="claude-card__sub">aguardando…</span>
+      </div>
+    );
+  }
+  const actualPct = Math.max(0, Math.min(100, Math.round(quota.session.actualPct * 100)));
+  const projPct = Math.max(0, Math.min(100, Math.round(quota.session.pctOfLimit * 100)));
+  const remain = quota.session.remainingMinutes;
+  const statusClass =
+    quota.status === 'critical' ? 'claude-card__bar--critical' :
+    quota.status === 'warn' ? 'claude-card__bar--warn' : '';
+  return (
+    <div
+      className="claude-card"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={actualPct}
+      title={`gasto atual: ${actualPct}% • projeção: ${projPct}%`}
+    >
+      <div className="claude-card__row">
+        <span className="claude-card__label">CLAUDE</span>
+        <span className="claude-card__pct">{actualPct}%</span>
+        <span className="claude-card__sub">
+          proj. {projPct}%{remain != null ? ` · ${remain}min` : ''}
+        </span>
+      </div>
+      <div className={`claude-card__bar ${statusClass}`.trim()}>
+        {/* Camada de fundo: projeção (mais clara). Camada da frente: gasto atual. */}
+        <div
+          className="claude-card__bar-fill claude-card__bar-fill--proj"
+          style={{ width: `${projPct}%` }}
+        />
+        <div className="claude-card__bar-fill" style={{ width: `${actualPct}%` }} />
+      </div>
+    </div>
+  );
+}
 
 function BandwidthRow({
   arrow,

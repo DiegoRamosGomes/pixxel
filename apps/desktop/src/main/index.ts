@@ -14,6 +14,8 @@ import {
   CLAUDE_TOOL_NAMES,
 } from './voice/tool-declarations.js';
 import { getClaudeManager } from './claude/manager.js';
+import { buildAppendSystemPrompt } from './claude/system-prompt.js';
+import { getQuotaService } from './claude/quota.js';
 import { saveIdea } from './integrations/ideas.js';
 import {
   getStudyPlanStore,
@@ -391,6 +393,31 @@ app.whenReady().then(async () => {
   shutdownHandlers.push(() => {
     void claudeManager.shutdown();
   });
+
+  // Quota monitoring: ccusage polling 5min. Bloqueia novas tarefas em
+  // ≥95%, avisa por voz em ≥70%. Background, não bloqueia boot.
+  const quota = getQuotaService();
+  quota.on('update', (snapshot) => {
+    emit({ type: 'claude_quota_update', quota: snapshot });
+  });
+  quota.on('threshold', (status, snapshot) => {
+    if (!live?.isOpen()) return;
+    const actualPct = Math.round(snapshot.session.actualPct * 100);
+    const projPct = Math.round(snapshot.session.pctOfLimit * 100);
+    const minLeft = snapshot.session.remainingMinutes ?? null;
+    const resetLine = minLeft != null ? ` Reset em ${minLeft}min.` : '';
+    const note = status === 'critical'
+      ? `[Sistema] Quota crítica: gastei ${actualPct}%, projeção pro fim do bloco é ${projPct}%.${resetLine} ` +
+        `AVISE em 1ª pessoa que novas tarefas de código vão ser BLOQUEADAS. ` +
+        `Recomende esperar reset. NÃO mencione "Claude" — diga "minha quota de uso de código".`
+      : `[Sistema] Quota em alerta: gastei ${actualPct}%, projeção ${projPct}%.${resetLine} ` +
+        `AVISE em 1ª pessoa que tá próximo do limite (cite projeção, não gasto atual — ` +
+        `o alerta dispara baseado em projeção). Recomende finalizar pendentes antes de iniciar novas. ` +
+        `NÃO mencione "Claude" — diga "quota de código".`;
+    live.sendText(note);
+  });
+  void quota.start();
+  shutdownHandlers.push(() => quota.stop());
 
   // Esc global = aborta apresentação em curso. Não interfere quando demo não
   // está rodando — o handler só seta a flag, a demo lê e para.
@@ -1224,11 +1251,15 @@ app.whenReady().then(async () => {
               const complexity = Number.isFinite(complexityRaw)
                 ? Math.min(10, Math.max(1, Math.round(complexityRaw)))
                 : 5;
+              const appendSystemPrompt = memory
+                ? buildAppendSystemPrompt(memory, cwd)
+                : undefined;
               const result = await claudeManager.start({
                 task,
                 cwd,
                 project: projectName,
                 complexity,
+                appendSystemPrompt,
               });
               const projLabel = projectName ?? '(default)';
               if (result.ok && result.queued) {
@@ -1542,6 +1573,43 @@ app.whenReady().then(async () => {
                   reason: r.reason ?? 'not_found',
                 });
               }
+              return;
+            }
+
+            if (call.name === 'claude_usage_status') {
+              const snapshot = quota.getLast();
+              if (!snapshot) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_data',
+                  text: 'Ainda não tenho leitura de uso — primeira atualização sai em breve.',
+                });
+                return;
+              }
+              const actualPct = Math.round(snapshot.session.actualPct * 100);
+              const projPct = Math.round(snapshot.session.pctOfLimit * 100);
+              const burnLine = snapshot.session.burnRate
+                ? ` Ritmo atual: ${Math.round(snapshot.session.burnRate.tokensPerMinute / 1000)}k tokens/min.`
+                : '';
+              const remainLine = snapshot.session.remainingMinutes != null
+                ? ` Faltam ${snapshot.session.remainingMinutes}min pro reset do bloco de 5h.`
+                : '';
+              const statusLabel =
+                snapshot.status === 'critical' ? 'CRÍTICO' :
+                snapshot.status === 'warn' ? 'em alerta' : 'tranquilo';
+              live?.sendToolResponse(call.id, call.name, {
+                ok: true,
+                quota: snapshot,
+                text:
+                  `Uso de código no bloco de 5h: gastei ${actualPct}% até agora, ` +
+                  `projeção pro fim do bloco é ${projPct}% — ${statusLabel}.` +
+                  burnLine + remainLine,
+                _note:
+                  'Resuma em 1ª pessoa. Cite gasto atual E projeção (são coisas diferentes — ' +
+                  'gasto atual é o que JÁ usei; projeção é pra onde vou no ritmo de agora). ' +
+                  'Estado geral em palavras ("tô tranquilo", "tô apertado", "tô no limite"). ' +
+                  'Não mencione "Claude" — é "minha cota de código" ou similar.',
+              });
               return;
             }
 

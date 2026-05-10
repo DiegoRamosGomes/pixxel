@@ -1716,6 +1716,78 @@ button.status-item--btn:disabled {
   transition: width 600ms ease;
 }
 
+/* ====== CLAUDE CARD (minimalista) ====== */
+.claude-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.claude-card__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.claude-card__label {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+}
+
+.claude-card__pct {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.claude-card__sub {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.claude-card--empty .claude-card__sub {
+  font-style: italic;
+}
+
+.claude-card__bar {
+  position: relative;
+  height: 2px;
+  background: var(--surface);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.claude-card__bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 600ms ease;
+}
+
+/* Camada da projeção fica atrás, mais suave (mostra "pra onde tá indo"). */
+.claude-card__bar-fill--proj {
+  background: rgba(0, 212, 255, 0.3);
+}
+
+.claude-card__bar--warn .claude-card__bar-fill {
+  background: rgba(241, 196, 15, 0.9);
+}
+.claude-card__bar--warn .claude-card__bar-fill--proj {
+  background: rgba(241, 196, 15, 0.3);
+}
+
+.claude-card__bar--critical .claude-card__bar-fill {
+  background: rgba(239, 68, 68, 0.95);
+}
+.claude-card__bar--critical .claude-card__bar-fill--proj {
+  background: rgba(239, 68, 68, 0.35);
+}
+
 /* ====== TOP PROCESSES ====== */
 .sidebar__top-grid {
   display: grid;

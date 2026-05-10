@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { ClaudeSessionChunk, ClaudeSessionView, ClaudeSessionStatus } from '../../shared/ipc.js';
 import { ClaudeRunner, isPixxelProject, newSessionId, type PermissionMode } from './runner.js';
 import { getSessionStore, SessionStore } from './sessions.js';
+import { getQuotaService, type QuotaService } from './quota.js';
 import type { ClaudeSession } from './types.js';
 
 export interface StartTaskInput {
@@ -86,12 +87,14 @@ const PLAN_THRESHOLD = 7;
  */
 export class ClaudeManager extends EventEmitter {
   private store: SessionStore;
+  private quota: QuotaService;
   private runs = new Map<string, ActiveRun>();
   private queue: QueuedTask[] = [];
 
   constructor() {
     super();
     this.store = getSessionStore();
+    this.quota = getQuotaService();
   }
 
   on<E extends keyof ManagerEvents>(event: E, listener: ManagerEvents[E]): this {
@@ -141,6 +144,17 @@ export class ClaudeManager extends EventEmitter {
   }
 
   async start(input: StartTaskInput): Promise<StartTaskResult> {
+    // Bloqueio em quota crítica (≥95% do limite semanal ou da sessão de 5h).
+    // Pixxel project NÃO é exceção — quota é compartilhada.
+    if (this.quota.isCritical()) {
+      const q = this.quota.getLast();
+      const sessionPct = q ? Math.round(q.session.pctOfLimit * 100) : 95;
+      return {
+        ok: false,
+        reason: `quota_critical (sessão de 5h em ${sessionPct}%, esperar reset antes de novas tarefas)`,
+      };
+    }
+
     const sessionId = newSessionId();
     const mode = pickMode(input);
 

@@ -30,6 +30,30 @@ export interface ClaudeSessionChunk {
   tool?: string;
 }
 
+export interface ClaudeQuotaSnapshot {
+  session: {
+    totalTokens: number;
+    costUSD: number;
+    tokenLimit: number;
+    projectedTokens: number;
+    /** Gasto ATUAL: totalTokens / tokenLimit. */
+    actualPct: number;
+    /** Projeção: projectedTokens / tokenLimit. Base dos alertas. */
+    pctOfLimit: number;
+    burnRate: { tokensPerMinute: number; costPerHour: number } | null;
+    projection: { totalCost: number } | null;
+    remainingMinutes: number | null;
+    startTime: string | null;
+    endTime: string | null;
+  };
+  weekly: {
+    totalCostUSD: number;
+    totalTokens: number;
+  };
+  status: 'ok' | 'warn' | 'critical';
+  lastUpdated: string;
+}
+
 export type LiveState =
   | { kind: 'idle' }
   | { kind: 'unavailable'; reason: string }
@@ -90,7 +114,8 @@ export type RendererEvent =
   | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
   | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string; project: string | null; cancelled: boolean }
   | { type: 'claude_session_plan_ready'; sessionId: string; project: string | null; plan: string }
-  | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] };
+  | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] }
+  | { type: 'claude_quota_update'; quota: ClaudeQuotaSnapshot };
 
 export type AssistantApi = {
   sendText: (text: string) => Promise<void>;

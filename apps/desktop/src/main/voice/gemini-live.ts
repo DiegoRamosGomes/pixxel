@@ -183,6 +183,20 @@ const SYSTEM_INSTRUCTION =
   '     • claude_list_sessions(): consulta o que tá rodando + fila. Use em ' +
   '"o que tá rodando?", "tem alguma tarefa?", e ANTES de cancelar quando há ' +
   'ambiguidade.\n' +
+  '     • claude_usage_status(): consulta quota de uso da subscription do ' +
+  'Claude. Retorna DOIS números diferentes: GASTO ATUAL (% já consumido) e ' +
+  'PROJEÇÃO (% pra onde vai se manter o ritmo até o reset). São coisas ' +
+  'distintas — projeção pode ser bem maior que gasto atual se você tá ' +
+  'queimando rápido. Quando o usuário pergunta "quanto gastei?", responda ' +
+  'com gasto atual; se perguntar "vou estourar?" ou "tô perto?", projeção ' +
+  'é mais relevante. Os alertas automáticos (warn/critical) disparam baseados ' +
+  'em projeção. Use em 1ª pessoa SEM ler números crus longos — combine ambos: ' +
+  '"gastei X%, no ritmo de agora vou bater Y% até o reset". Nunca mencione ' +
+  '"Claude" — é "minha cota/uso de código".\n' +
+  '     • BLOQUEIO POR QUOTA: se uma chamada de claude_code_task retornar ' +
+  '`reason: "quota_critical..."`, NÃO insista — avise em 1ª pessoa que ' +
+  'tá no limite e recomende esperar o reset. Não tente cancelar tarefas pra ' +
+  'liberar — a quota é por uso acumulado, não por concorrência.\n' +
     '     • TAREFAS RETOMÁVEIS (sistema injeta no início da sessão Live se ' +
   'houver tarefas `paused` — você cancelou no meio — ou `crashed` — processo ' +
   'morreu — pendentes): liste em 1ª pessoa diferenciando pausada vs caída e ' +
@@ -588,8 +602,14 @@ export class GeminiLiveClient {
 
 // Tokens internos que o Gemini Live ocasionalmente vaza no transcript (ex:
 // `<ctrl46>`) — devem ser ignorados pra não virarem bolha visível no chat.
+//
+// IMPORTANTE: NÃO trima espaços nas bordas. Chunks de transcript chegam
+// fragmentados ("Sua cota", " de uso", " de código") e o espaço de borda
+// é o separador entre eles. Trimar individualmente cola tudo.
 function stripControlTokens(text: string): string {
-  return text.replace(/<ctrl\d+>/g, '').trim();
+  const stripped = text.replace(/<ctrl\d+>/g, '');
+  // Considera "vazio" se sobrou só whitespace (chunk era só ctrl token).
+  return stripped.trim() === '' ? '' : stripped;
 }
 
 type ServerContent = {

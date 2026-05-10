@@ -1300,6 +1300,16 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'claude_usage_status',
+    description:
+      'Consulta uso/quota da subscription do Claude Code (Max plan). Retorna % usado da ' +
+      'semana e da sessão de 5h atual, burn rate, projeção de gasto. ' +
+      'Use quando o usuário perguntar "quanto tô usando do Claude?", "quanto da minha quota ' +
+      'já gastei?", "tá perto do limite?", "quanto resta da minha cota?". ' +
+      'Atualizada a cada 5min em background; pode chamar a qualquer momento.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'claude_resume_crashed',
     description:
       'Retoma tarefa(s) retomáveis — `paused` (você cancelou no meio) ou `crashed` (processo morreu). ' +

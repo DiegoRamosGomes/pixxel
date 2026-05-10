@@ -81,7 +81,7 @@ export type RendererEvent =
   | { type: 'claude_session_started'; session: ClaudeSessionView }
   | { type: 'claude_session_chunk'; sessionId: string; chunk: ClaudeSessionChunk }
   | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
-  | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string }
+  | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string; project: string | null; cancelled: boolean }
   | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] };
 
 export type AssistantApi = {

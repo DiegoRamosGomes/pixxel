@@ -1204,8 +1204,32 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
   {
     name: 'claude_cancel_task',
     description:
-      'Cancela a tarefa de código que está rodando agora. Use quando o usuário disser "cancela", "para", "interrompe". ' +
-      'Retorna { wasRunning } — confirme com base nesse retorno, NUNCA invente "não tinha nada rodando" sem ver o retorno.',
+      'Cancela tarefa(s) de código rodando. Use quando o usuário disser "cancela", "para", "interrompe". ' +
+      'Comportamento por `target`:\n' +
+      '- omitido + 1 sessão rodando → cancela essa\n' +
+      '- omitido + >1 rodando → retorna { ok: false, reason: "ambiguous", running: [...] }; LISTE pro usuário e pergunte qual\n' +
+      '- "all"/"todas" → cancela todas + esvazia fila\n' +
+      '- nome de projeto (fuzzy match: "easytax", "pixxel") → cancela a desse projeto. Se >1 sessão no mesmo projeto, ambíguo\n' +
+      '- sessionId UUID → cancela específica\n' +
+      'NUNCA invente "não tinha nada rodando" sem ver o retorno.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description:
+            'Opcional. "all"/"todas" pra cancelar todas, nome do projeto pra fuzzy match, ou sessionId UUID. Omita pra cancelar a única rodando.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_list_sessions',
+    description:
+      'Lista tarefas de código em andamento + tamanho da fila. ' +
+      'Use quando o usuário perguntar "o que tá rodando?", "tem alguma tarefa em andamento?", ' +
+      '"quantas tarefas?", "quais tarefas estão rodando?". ' +
+      'Também útil ANTES de cancelar quando você não sabe qual escolher.',
     parameters: { type: 'object', properties: {} },
   },
 ];

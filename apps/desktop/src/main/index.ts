@@ -359,13 +359,15 @@ app.whenReady().then(async () => {
   claudeManager.on('session_status', (sessionId, status) => {
     emit({ type: 'claude_session_status', sessionId, status });
   });
-  claudeManager.on('session_done', (sessionId, ok, finalText) => {
-    emit({ type: 'claude_session_done', sessionId, ok, finalText });
-    // Injeta resultado de volta no Live pro Gemini comentar em primeira pessoa.
-    if (live) {
+  claudeManager.on('session_done', (sessionId, ok, finalText, project, cancelled) => {
+    emit({ type: 'claude_session_done', sessionId, ok, finalText, project, cancelled });
+    // Injeta resultado de volta no Live pro Gemini comentar em 1ª pessoa.
+    // Cancelamento NÃO injeta — o handler do claude_cancel_task já confirma.
+    if (live && !cancelled) {
+      const projectLabel = project ? ` no projeto ${project}` : '';
       const note = ok
-        ? `[Sistema] A tarefa de código que você disparou terminou. Resultado: ${finalText.slice(0, 1500)}. Confirme em PRIMEIRA PESSOA, sem mencionar "Claude" nem agente externo.`
-        : `[Sistema] A tarefa de código que você disparou foi cancelada ou falhou. Avise o usuário em primeira pessoa.`;
+        ? `[Sistema] A tarefa de código${projectLabel} terminou. Resultado: ${finalText.slice(0, 1500)}. Confirme em 1ª pessoa, sem mencionar "Claude" nem agente externo.`
+        : `[Sistema] A tarefa de código${projectLabel} falhou. Avise em 1ª pessoa, sem mencionar "Claude".`;
       live.sendText(note);
     }
   });
@@ -1163,22 +1165,23 @@ app.whenReady().then(async () => {
                 cwd,
                 project: projectName,
               });
-              if (result.ok) {
+              if (result.ok && result.queued) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  queued: true,
+                  position: result.position,
+                  text: `Enfileirado no projeto ${projectName ?? '(default)'} (posição ${result.position}). Já tem 3 rodando.`,
+                  _note:
+                    'Avise em 1ª pessoa que vai enfileirar e cite a posição. ' +
+                    'Não mencione "Claude" nem agente externo.',
+                });
+              } else if (result.ok) {
                 live?.sendToolResponse(call.id, call.name, {
                   ok: true,
                   text: `Disparado em background no projeto ${projectName ?? '(default)'}. Você vai receber o resultado quando terminar.`,
                   _note:
                     'A tarefa roda async. Confirme em PRIMEIRA PESSOA o que vai fazer ' +
-                    '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo. ' +
-                    'O resultado chega depois via sendText do sistema.',
-                });
-              } else if (result.reason === 'session_running') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'já tem uma tarefa de código rodando',
-                  _note:
-                    'Avise o usuário em primeira pessoa que tem outra tarefa em andamento ' +
-                    'e pergunte se quer cancelar a atual antes (claude_cancel_task) ou esperar terminar.',
+                    '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo.',
                 });
               } else {
                 live?.sendToolResponse(call.id, call.name, {
@@ -1190,13 +1193,73 @@ app.whenReady().then(async () => {
             }
 
             if (call.name === 'claude_cancel_task') {
-              const r = await claudeManager.cancel();
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
+              if (target) {
+                if (/^(all|todas|tudo|tudoo|todos)$/i.test(target)) {
+                  targetParam.all = true;
+                } else if (/^[0-9a-f-]{36}$/i.test(target)) {
+                  targetParam.sessionId = target;
+                } else {
+                  targetParam.project = target;
+                }
+              }
+              const r = await claudeManager.cancel(targetParam);
+              if (r.ok) {
+                const projects = r.cancelled.map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  cancelled: r.cancelled.length,
+                  queueDiscarded: r.queueDiscarded,
+                  text: `Cancelei ${r.cancelled.length} sessão(ões): ${projects}` +
+                    (r.queueDiscarded > 0 ? `. Descartei ${r.queueDiscarded} da fila.` : '.'),
+                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude".',
+                });
+              } else if (r.reason === 'no_running') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_running',
+                  text: 'Não tem nenhuma tarefa de código rodando.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = r.running.map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  running: r.running,
+                  text: `Tem ${r.running.length} rodando: ${list}. Pergunte qual cancelar.`,
+                  _note:
+                    'NÃO cancele nada agora. Liste os projetos pro usuário em 1ª pessoa ' +
+                    '("tenho X, Y e Z rodando — cancelo qual?") e espere a resposta. ' +
+                    'Quando ele falar, chame claude_cancel_task de novo com target=<nome>.',
+                });
+              } else {
+                const list = r.running.length > 0
+                  ? r.running.map((s) => s.project ?? '(default)').join(', ')
+                  : '(nenhuma)';
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'not_found',
+                  running: r.running,
+                  text: `Não achei sessão pra "${target}". Rodando: ${list}.`,
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_list_sessions') {
+              const running = claudeManager.running();
+              const queueLen = claudeManager.queueLength();
+              const summary = running.length === 0
+                ? `Nenhuma tarefa rodando.${queueLen > 0 ? ` ${queueLen} na fila.` : ''}`
+                : `${running.length} rodando: ${running.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}` +
+                    (queueLen > 0 ? `. ${queueLen} na fila.` : '.');
               live?.sendToolResponse(call.id, call.name, {
                 ok: true,
-                wasRunning: r.wasRunning,
-                _note: r.wasRunning
-                  ? 'Cancelado. Confirme em PRIMEIRA PESSOA, sem mencionar "Claude".'
-                  : 'Não havia tarefa rodando. Diga isso em primeira pessoa.',
+                running,
+                queueLength: queueLen,
+                text: summary,
+                _note: 'Resuma em 1ª pessoa, sem mencionar "Claude".',
               });
               return;
             }

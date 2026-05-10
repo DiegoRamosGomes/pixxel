@@ -183,6 +183,18 @@ const SYSTEM_INSTRUCTION =
   '     • claude_list_sessions(): consulta o que tá rodando + fila. Use em ' +
   '"o que tá rodando?", "tem alguma tarefa?", e ANTES de cancelar quando há ' +
   'ambiguidade.\n' +
+    '     • TAREFAS RETOMÁVEIS (sistema injeta no início da sessão Live se ' +
+  'houver tarefas `paused` — você cancelou no meio — ou `crashed` — processo ' +
+  'morreu — pendentes): liste em 1ª pessoa diferenciando pausada vs caída e ' +
+  'pergunte se retoma. Também responda a pedidos diretos do usuário ' +
+  '("retoma a tarefa que tinha pausado do X", "continua aquela tarefa do Y"). ' +
+  'Resposta:\n' +
+  '       Sim/retoma/continua → claude_resume_crashed() (omita target se 1; ' +
+  '"all" pra todas; nome do projeto pra específica). Resume preserva ' +
+  'contexto — Claude continua de onde parou.\n' +
+  '       Não/deixa pra lá → claude_dismiss_crashed() (descarta sem retomar).\n' +
+  '       Misto ("retoma só a do easytax, descarta a do pixxel") → 2 chamadas ' +
+  'sequenciais com targets específicos.\n' +
   '     • PARALELISMO: até 3 sessões simultâneas. 4ª entra em fila FIFO. Se a ' +
   'tool retornar {queued:true,position:N}, avise em 1ª pessoa ("vou ' +
   'enfileirar, tem N pela frente"). Se "fila cheia", avise sem enfileirar.\n' +
@@ -542,23 +554,29 @@ export class GeminiLiveClient {
         }
         // transcript opcional (input/output transcription)
         if (part.text && !part.thought) {
-          this.listeners.onTranscript?.(part.text, 'model');
+          const cleaned = stripControlTokens(part.text);
+          if (cleaned) this.listeners.onTranscript?.(cleaned, 'model');
         }
       }
     }
 
     if (sc.inputTranscription?.text) {
-      this.listeners.onTranscript?.(sc.inputTranscription.text, 'user');
+      const cleaned = stripControlTokens(sc.inputTranscription.text);
+      if (cleaned) this.listeners.onTranscript?.(cleaned, 'user');
     }
     if (sc.outputTranscription?.text) {
-      this.listeners.onTranscript?.(sc.outputTranscription.text, 'model');
+      const cleaned = stripControlTokens(sc.outputTranscription.text);
+      if (cleaned) this.listeners.onTranscript?.(cleaned, 'model');
     }
 
+    // turnComplete sempre força ready — mesmo quando o modelo não chegou a
+    // emitir áudio (caso patológico em que ele só "fala" tokens de controle
+    // tipo <ctrl46> no transcript). Sem esse reset, o renderer mantém o ref
+    // do transcript do modelo aberto e a próxima resposta gruda na bolha
+    // anterior.
     if (sc.interrupted || sc.turnComplete) {
-      if (this.modelSpeaking) {
-        this.modelSpeaking = false;
-        this.setState({ kind: 'ready' });
-      }
+      this.modelSpeaking = false;
+      this.setState({ kind: 'ready' });
     }
   }
 
@@ -566,6 +584,12 @@ export class GeminiLiveClient {
     this.state = state;
     this.listeners.onState(state);
   }
+}
+
+// Tokens internos que o Gemini Live ocasionalmente vaza no transcript (ex:
+// `<ctrl46>`) — devem ser ignorados pra não virarem bolha visível no chat.
+function stripControlTokens(text: string): string {
+  return text.replace(/<ctrl\d+>/g, '').trim();
 }
 
 type ServerContent = {

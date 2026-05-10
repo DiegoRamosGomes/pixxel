@@ -1299,6 +1299,42 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
       'Também útil ANTES de cancelar quando você não sabe qual escolher.',
     parameters: { type: 'object', properties: {} },
   },
+  {
+    name: 'claude_resume_crashed',
+    description:
+      'Retoma tarefa(s) retomáveis — `paused` (você cancelou no meio) ou `crashed` (processo morreu). ' +
+      'O sistema te avisa quando o Live conecta se houver pendências. Use quando o usuário ' +
+      'disser "sim, retoma", "continua", "pode seguir" depois dessa pergunta, OU quando ele ' +
+      'pedir explicitamente "retoma aquela tarefa pausada do X". ' +
+      'Sem target + 1 retomável: retoma essa. Vários: ambiguous, pergunte qual. ' +
+      '"all"/"todas" retoma todas. Nome do projeto: fuzzy match. ' +
+      'Resume preserva contexto — Claude continua de onde parou.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: '"all"/"todas", nome do projeto, ou sessionId UUID. Omita se só 1 retomável.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_dismiss_crashed',
+    description:
+      'Descarta tarefa(s) pausadas ou caídas sem retomar (vai pro histórico como concluída). ' +
+      'Use quando o usuário disser "não retoma", "deixa pra lá", "esquece essas", "descarta". ' +
+      'Sem target + 1: descarta. Vários: ambiguous. "all" descarta todas.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: '"all", nome do projeto, ou sessionId. Omita se só 1 candidato.',
+        },
+      },
+    },
+  },
 ];
 
 export const CLAUDE_TOOL_NAMES: Set<string> = new Set(CLAUDE_TOOLS.map((t) => t.name));

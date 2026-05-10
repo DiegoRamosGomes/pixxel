@@ -414,7 +414,15 @@ export function App() {
           break;
         }
         case 'claude_sessions_snapshot':
-          setClaudeSessions(event.sessions.map((s) => ({ ...s, chunks: [] })));
+          // Merge: preserva chunks/finalText de sessões já em state, mas adiciona
+          // novas (do snapshot inicial pós-boot: paused/crashed/awaiting do disco).
+          setClaudeSessions((prev) => {
+            const prevById = new Map(prev.map((s) => [s.sessionId, s]));
+            return event.sessions.map((s) => {
+              const existing = prevById.get(s.sessionId);
+              return existing ? { ...existing, ...s } : { ...s, chunks: [] };
+            });
+          });
           break;
       }
     });

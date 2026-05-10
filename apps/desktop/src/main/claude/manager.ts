@@ -129,6 +129,13 @@ export class ClaudeManager extends EventEmitter {
       .map(toView);
   }
 
+  crashed(): ClaudeSessionView[] {
+    return this.store
+      .active()
+      .filter((s) => s.status === 'crashed')
+      .map(toView);
+  }
+
   queueLength(): number {
     return this.queue.length;
   }
@@ -220,12 +227,12 @@ export class ClaudeManager extends EventEmitter {
     return { ok: true, session: toView(found) };
   }
 
-  /** Rejeita um plano awaiting → marca como `paused` e remove do active. */
+  /** Rejeita um plano awaiting → marca como `done` (terminou intencionalmente) e move pra history. */
   async rejectPlan(target: PlanTarget = {}): Promise<PlanActionResult> {
     const picked = this.pickAwaiting(target);
     if ('ok' in picked) return picked;
     const found = picked.session;
-    await this.store.finish(found.sessionId, 'paused');
+    await this.store.finish(found.sessionId, 'done');
     this.emit('session_done', found.sessionId, false, '', found.project, true);
     this.maybeStartNext();
     return { ok: true, session: toView(found) };
@@ -250,11 +257,11 @@ export class ClaudeManager extends EventEmitter {
           cancelled.push(toView(view));
         }
       }
-      // Rejeita awaiting (planos pendentes)
+      // Rejeita awaiting (planos pendentes) → done em history.
       for (const view of awaitingViews) {
         const session = this.store.get(view.sessionId);
         if (!session) continue;
-        await this.store.finish(view.sessionId, 'paused');
+        await this.store.finish(view.sessionId, 'done');
         this.emit('session_done', view.sessionId, false, '', view.project, true);
         rejected.push(view);
       }
@@ -268,9 +275,9 @@ export class ClaudeManager extends EventEmitter {
         await r.runner.cancel();
         return { ok: true, cancelled: [toView(view)], queueDiscarded: 0, rejected: [] };
       }
-      // Talvez seja awaiting → trata como rejeição.
+      // Talvez seja awaiting → trata como rejeição (done em history).
       if (view && view.status === 'awaiting_approval') {
-        await this.store.finish(view.sessionId, 'paused');
+        await this.store.finish(view.sessionId, 'done');
         this.emit('session_done', view.sessionId, false, '', view.project, true);
         return { ok: true, cancelled: [], queueDiscarded: 0, rejected: [toView(view)] };
       }
@@ -294,7 +301,7 @@ export class ClaudeManager extends EventEmitter {
         return { ok: true, cancelled: [toView(view)], queueDiscarded: 0, rejected: [] };
       }
       if (view && view.status === 'awaiting_approval') {
-        await this.store.finish(view.sessionId, 'paused');
+        await this.store.finish(view.sessionId, 'done');
         this.emit('session_done', view.sessionId, false, '', view.project, true);
         return { ok: true, cancelled: [], queueDiscarded: 0, rejected: [toView(view)] };
       }
@@ -314,11 +321,132 @@ export class ClaudeManager extends EventEmitter {
       }
       // 1 awaiting
       const view = awaitingViews[0];
-      await this.store.finish(view.sessionId, 'paused');
+      await this.store.finish(view.sessionId, 'done');
       this.emit('session_done', view.sessionId, false, '', view.project, true);
       return { ok: true, cancelled: [], queueDiscarded: 0, rejected: [view] };
     }
     return { ok: false, reason: 'ambiguous', running: [...runningViews, ...awaitingViews] };
+  }
+
+  /** Sessões retomáveis: paused (cancel manual) + crashed (pid morreu no boot anterior). */
+  resumable(): ClaudeSessionView[] {
+    return this.store
+      .active()
+      .filter((s) => s.status === 'paused' || s.status === 'crashed')
+      .map(toView);
+  }
+
+  /**
+   * Retoma sessões `paused` ou `crashed` — re-spawn em execute com `--resume`,
+   * mantendo session-id e contexto. Prompt curto explica o motivo da pausa
+   * pro Claude decidir o que fazer.
+   *
+   * target: omitido + 1 retomável → retoma essa. omitido + várias → ambiguous.
+   *         "all" → retoma todas. project/sessionId → match.
+   */
+  async resumeCrashed(target: CancelTarget = {}): Promise<{
+    ok: boolean;
+    resumed: ClaudeSessionView[];
+    failed: Array<{ session: ClaudeSessionView; reason: string }>;
+    reason?: 'no_crashed' | 'ambiguous' | 'not_found';
+    crashed?: ClaudeSessionView[];
+  }> {
+    const candidates = this.resumable();
+
+    let toResume: ClaudeSessionView[] = [];
+
+    if (target.all) {
+      toResume = candidates;
+    } else if (target.sessionId) {
+      const found = candidates.find((s) => s.sessionId === target.sessionId);
+      if (!found) return { ok: false, resumed: [], failed: [], reason: 'not_found', crashed: candidates };
+      toResume = [found];
+    } else if (target.project) {
+      const matches = matchByProject(candidates, target.project);
+      if (matches.length === 0) {
+        return { ok: false, resumed: [], failed: [], reason: 'not_found', crashed: candidates };
+      }
+      if (matches.length > 1) {
+        return { ok: false, resumed: [], failed: [], reason: 'ambiguous', crashed: matches };
+      }
+      toResume = matches;
+    } else {
+      if (candidates.length === 0) {
+        return { ok: false, resumed: [], failed: [], reason: 'no_crashed' };
+      }
+      if (candidates.length > 1) {
+        return { ok: false, resumed: [], failed: [], reason: 'ambiguous', crashed: candidates };
+      }
+      toResume = candidates;
+    }
+
+    const resumed: ClaudeSessionView[] = [];
+    const failed: Array<{ session: ClaudeSessionView; reason: string }> = [];
+    for (const view of toResume) {
+      const session = this.store.get(view.sessionId);
+      if (!session) continue;
+      const wasCrashed = session.status === 'crashed';
+      const reason = wasCrashed
+        ? 'o processo morreu inesperadamente'
+        : 'o usuário cancelou no meio';
+      const r = await this.spawn({
+        sessionId: session.sessionId,
+        task:
+          `Esta sessão foi pausada (${reason}). Continue de onde parou: revise o que já ` +
+          `foi feito no projeto, identifique o que ainda falta da tarefa original e termine. ` +
+          `Tarefa original: "${session.taskDescription}".`,
+        cwd: session.cwd,
+        project: session.project,
+        mode: 'execute',
+        resume: true,
+      });
+      if (r.ok) resumed.push(view);
+      else failed.push({ session: view, reason: r.reason });
+    }
+    return { ok: true, resumed, failed };
+  }
+
+  /**
+   * Descarta sessões `paused`/`crashed` sem retomar — marca como `done`
+   * (terminou intencionalmente) e move pra history.
+   */
+  async dismissCrashed(target: CancelTarget = {}): Promise<{
+    ok: boolean;
+    dismissed: ClaudeSessionView[];
+    reason?: 'no_crashed' | 'ambiguous' | 'not_found';
+    crashed?: ClaudeSessionView[];
+  }> {
+    const candidates = this.resumable();
+
+    let toDismiss: ClaudeSessionView[] = [];
+    if (target.all) {
+      toDismiss = candidates;
+    } else if (target.sessionId) {
+      const found = candidates.find((s) => s.sessionId === target.sessionId);
+      if (!found) return { ok: false, dismissed: [], reason: 'not_found', crashed: candidates };
+      toDismiss = [found];
+    } else if (target.project) {
+      const matches = matchByProject(candidates, target.project);
+      if (matches.length === 0) {
+        return { ok: false, dismissed: [], reason: 'not_found', crashed: candidates };
+      }
+      if (matches.length > 1) {
+        return { ok: false, dismissed: [], reason: 'ambiguous', crashed: matches };
+      }
+      toDismiss = matches;
+    } else {
+      if (candidates.length === 0) return { ok: false, dismissed: [], reason: 'no_crashed' };
+      if (candidates.length > 1) return { ok: false, dismissed: [], reason: 'ambiguous', crashed: candidates };
+      toDismiss = candidates;
+    }
+
+    const dismissed: ClaudeSessionView[] = [];
+    for (const view of toDismiss) {
+      await this.store.finish(view.sessionId, 'done');
+      this.emit('session_done', view.sessionId, false, '', view.project, true);
+      dismissed.push(view);
+    }
+    return { ok: true, dismissed };
   }
 
   async shutdown(): Promise<void> {
@@ -460,15 +588,22 @@ export class ClaudeManager extends EventEmitter {
         }
       }
 
-      // Execute mode (ou plan que falhou): finaliza.
-      const finalStatus: ClaudeSessionStatus = wasCancelled
-        ? 'paused'
-        : code === 0
-          ? 'done'
-          : 'failed';
-      const ok = !wasCancelled && code === 0;
+      // Cancel manual: mantém em active como `paused` (pode retomar depois).
+      // done/failed: finaliza, vai pra history.
+      if (wasCancelled) {
+        void this.store.markPaused(sessionId).then(() => {
+          this.emit('session_status', sessionId, 'paused');
+          // session_done com cancelled=true sinaliza UX final, mas a sessão
+          // persiste em active aguardando resume manual.
+          this.emit('session_done', sessionId, false, finalText, project, true);
+          this.maybeStartNext();
+        });
+        return;
+      }
+      const finalStatus: ClaudeSessionStatus = code === 0 ? 'done' : 'failed';
+      const ok = code === 0;
       void this.store.finish(sessionId, finalStatus).then(() => {
-        this.emit('session_done', sessionId, ok, finalText, project, wasCancelled);
+        this.emit('session_done', sessionId, ok, finalText, project, false);
         this.maybeStartNext();
       });
     });

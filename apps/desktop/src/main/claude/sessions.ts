@@ -39,7 +39,24 @@ export class SessionStore {
       console.warn('[claude/sessions] falha ao ler sessions.json, começando vazio:', err);
       this.store = emptyStore();
     }
+    await this.migratePausedToActive();
     this.loaded = true;
+  }
+
+  /**
+   * Migração one-time: versões antigas movem `paused` pra history. Agora
+   * `paused` é estado retomável → fica em active. Puxa de volta o que
+   * existia em history pra dar continuidade pro usuário.
+   */
+  private async migratePausedToActive(): Promise<void> {
+    const toMove = this.store.history.filter((s) => s.status === 'paused');
+    if (toMove.length === 0) return;
+    this.store.history = this.store.history.filter((s) => s.status !== 'paused');
+    this.store.active.push(...toMove);
+    console.log(
+      `[claude/sessions] migração: ${toMove.length} sessão(ões) paused movidas de history → active`,
+    );
+    await this.flush();
   }
 
   /** Retorna sessões ativas (running/paused). Sessões `crashed` ficam em `active` até o usuário decidir. */
@@ -67,6 +84,20 @@ export class SessionStore {
     if (!s) return;
     s.status = status;
     if (pid !== null) s.pid = pid;
+    s.updatedAt = new Date().toISOString();
+    await this.flush();
+  }
+
+  /**
+   * Marca uma sessão como `paused` mantendo-a em `active` (NÃO move pra
+   * history). Cancel manual usa isso — diferente de `finish()`, que finaliza
+   * a sessão (done/failed).
+   */
+  async markPaused(sessionId: string): Promise<void> {
+    const s = this.store.active.find((x) => x.sessionId === sessionId);
+    if (!s) return;
+    s.status = 'paused';
+    s.pid = null;
     s.updatedAt = new Date().toISOString();
     await this.flush();
   }

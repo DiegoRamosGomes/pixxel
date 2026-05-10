@@ -125,6 +125,9 @@ const LIVE_RECONNECT_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 40_000, 60_000];
 // Cinta de segurança pro briefing: só roda uma vez por sessão Live, mesmo
 // que Gemini chame de novo por engano. Reset no live-start.
 let briefingHandledThisSession = false;
+// Mesma ideia: só avisa o Gemini sobre sessões Claude crashed uma vez por
+// conexão Live (não a cada reconnect). Reset no live-start.
+let crashedNotifiedThisLive = false;
 // Detecção de "Gemini hallucina sobre estado". Quando user transcript matchar
 // uma pergunta de estado, força chamada antecipada de current_work_status
 // se Gemini não chamou em 4s.
@@ -346,8 +349,9 @@ app.whenReady().then(async () => {
   // ~/pixxel/active-work.json. Briefing matinal lê pra sugerir continuar.
   await getActiveWorkStore().load();
 
-  // Claude Code manager (Fase 1: 1 sessão por vez). Carrega ~/pixxel/sessions.json
-  // e reconcilia órfãs (running com pid morto → crashed).
+  // Claude Code manager. Carrega ~/pixxel/sessions.json e reconcilia órfãs
+  // (running com pid morto → crashed). Snapshot vai pro renderer logo após
+  // a janela carregar (emit é noop até window existir).
   const claudeManager = getClaudeManager();
   await claudeManager.init();
   claudeManager.on('session_started', (session) => {
@@ -583,6 +587,12 @@ app.whenReady().then(async () => {
       path: activeProjectCwd,
       name: activeProjectName,
     });
+    // Snapshot inicial das sessões Claude (paused/crashed/awaiting_approval)
+    // pra UI mostrar widgets carregados de sessões anteriores.
+    emit({
+      type: 'claude_sessions_snapshot',
+      sessions: claudeManager.snapshot(),
+    });
     // Pós-restart via tool restart_app: religa a Live sozinho. Aceita
     // sinal via argv (modo packageado) OU env (modo dev — o argv não
     // atravessa `npm run dev:desktop`).
@@ -773,6 +783,7 @@ app.whenReady().then(async () => {
     }
     // Reset da cinta do briefing — nova sessão pode ter briefing de novo.
     briefingHandledThisSession = false;
+    crashedNotifiedThisLive = false;
     // Widgets ficam pendentes até o primeiro chunk de áudio depois da tool call,
     // pra aparecerem em sincronia com a fala (não na hora que a integração
     // termina, que pode ser bem antes).
@@ -803,6 +814,40 @@ app.whenReady().then(async () => {
             // Flush das falas de webhook que chegaram durante boot/reconnect.
             // Pequeno delay pra dar prioridade pro briefing matinal se houver.
             setTimeout(() => flushPendingWebhookPhrases(), 500);
+            // Sessões retomáveis (paused/crashed) — só avisa uma vez por
+            // conexão Live (não a cada reconnect dentro da mesma sessão).
+            if (!crashedNotifiedThisLive) {
+              const resumable = claudeManager.resumable();
+              if (resumable.length > 0) {
+                crashedNotifiedThisLive = true;
+                setTimeout(() => {
+                  if (!live?.isOpen()) return;
+                  const paused = resumable.filter((s) => s.status === 'paused');
+                  const crashed = resumable.filter((s) => s.status === 'crashed');
+                  const buckets: string[] = [];
+                  if (paused.length > 0) {
+                    const list = paused
+                      .map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 80)}")`)
+                      .join('; ');
+                    buckets.push(`${paused.length} pausada(s) (você cancelou no meio): ${list}`);
+                  }
+                  if (crashed.length > 0) {
+                    const list = crashed
+                      .map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 80)}")`)
+                      .join('; ');
+                    buckets.push(`${crashed.length} caída(s) (processo morreu): ${list}`);
+                  }
+                  live.sendText(
+                    `[Sistema] Tarefa(s) de código pendente(s) de sessões anteriores: ` +
+                    buckets.join('. ') + '. ' +
+                    `INSTRUÇÃO: avise em 1ª pessoa e PERGUNTE se quer retomar de onde parou. ` +
+                    `Sim/retoma/continua → claude_resume_crashed(). Não/deixa pra lá → ` +
+                    `claude_dismiss_crashed(). Se forem várias, ofereça "todas" ou específica. ` +
+                    `NUNCA mencione "Claude" nem agente externo.`,
+                  );
+                }, 1500);
+              }
+            }
             // Briefing automático na primeira conexão Live do dia.
             // Verifica disco antes de disparar pra evitar duplicação se o user
             // já pediu manualmente nessa sessão.
@@ -1415,16 +1460,129 @@ app.whenReady().then(async () => {
               return;
             }
 
+            if (call.name === 'claude_resume_crashed') {
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
+              if (target) {
+                if (/^(all|todas|tudo|todos)$/i.test(target)) targetParam.all = true;
+                else if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
+                else targetParam.project = target;
+              }
+              const r = await claudeManager.resumeCrashed(targetParam);
+              if (r.ok) {
+                const list = r.resumed.map((s) => s.project ?? '(default)').join(', ');
+                const failedText = r.failed.length > 0
+                  ? ` Falharam: ${r.failed.map((f) => `${f.session.project ?? '(default)'} (${f.reason})`).join('; ')}.`
+                  : '';
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  resumed: r.resumed.length,
+                  failed: r.failed.length,
+                  text: `Retomando ${r.resumed.length} sessão(ões): ${list}.${failedText}`,
+                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude". Resultados virão depois.',
+                });
+              } else if (r.reason === 'no_crashed') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_crashed',
+                  text: 'Não tem sessões caídas pra retomar.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = (r.crashed ?? []).map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  crashed: r.crashed,
+                  text: `Tem ${(r.crashed ?? []).length} caídas: ${list}. Pergunte qual retomar.`,
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: r.reason ?? 'not_found',
+                  text: 'Não achei sessão pra retomar.',
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_dismiss_crashed') {
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
+              if (target) {
+                if (/^(all|todas|tudo|todos)$/i.test(target)) targetParam.all = true;
+                else if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
+                else targetParam.project = target;
+              }
+              const r = await claudeManager.dismissCrashed(targetParam);
+              if (r.ok) {
+                const list = r.dismissed.map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  dismissed: r.dismissed.length,
+                  text: `Descartei ${r.dismissed.length} sessão(ões): ${list}.`,
+                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude".',
+                });
+              } else if (r.reason === 'no_crashed') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_crashed',
+                  text: 'Não tem sessões caídas pra descartar.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = (r.crashed ?? []).map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  crashed: r.crashed,
+                  text: `Tem ${(r.crashed ?? []).length} caídas: ${list}. Pergunte qual descartar.`,
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: r.reason ?? 'not_found',
+                });
+              }
+              return;
+            }
+
             if (call.name === 'claude_list_sessions') {
               const running = claudeManager.running();
+              const awaiting = claudeManager.awaiting();
+              const resumable = claudeManager.resumable(); // paused + crashed
               const queueLen = claudeManager.queueLength();
-              const summary = running.length === 0
-                ? `Nenhuma tarefa rodando.${queueLen > 0 ? ` ${queueLen} na fila.` : ''}`
-                : `${running.length} rodando: ${running.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}` +
-                    (queueLen > 0 ? `. ${queueLen} na fila.` : '.');
+              const parts: string[] = [];
+              if (running.length > 0) {
+                parts.push(
+                  `${running.length} rodando: ${running.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
+                );
+              }
+              if (awaiting.length > 0) {
+                parts.push(
+                  `${awaiting.length} aguardando aprovação de plano: ${awaiting.map((s) => s.project ?? '(default)').join(', ')}`,
+                );
+              }
+              const paused = resumable.filter((s) => s.status === 'paused');
+              const crashed = resumable.filter((s) => s.status === 'crashed');
+              if (paused.length > 0) {
+                parts.push(
+                  `${paused.length} pausada(s) (retomável): ${paused.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
+                );
+              }
+              if (crashed.length > 0) {
+                parts.push(
+                  `${crashed.length} caída(s) (retomável): ${crashed.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
+                );
+              }
+              if (queueLen > 0) parts.push(`${queueLen} na fila`);
+              const summary = parts.length === 0
+                ? 'Nenhuma tarefa de código em qualquer estado.'
+                : parts.join('. ') + '.';
               live?.sendToolResponse(call.id, call.name, {
                 ok: true,
                 running,
+                awaiting,
+                paused,
+                crashed,
                 queueLength: queueLen,
                 text: summary,
                 _note: 'Resuma em 1ª pessoa, sem mencionar "Claude".',

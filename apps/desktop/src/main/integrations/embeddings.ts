@@ -106,21 +106,72 @@ function dot(a: number[], b: number[]): number {
   return s;
 }
 
+// Free tier do gemini-embedding-001: 100 RPM, 30k TPM, 1k RPD.
+// Mantém folga (~80 RPM, ~25k TPM) pra reindex em burst no startup não estourar.
+const RPM_LIMIT = 80;
+const TPM_LIMIT = 25_000;
+const WINDOW_MS = 60_000;
+type CallRecord = { at: number; tokens: number };
+const callHistory: CallRecord[] = [];
+let throttleChain: Promise<void> = Promise.resolve();
+
+function estimateTokens(text: string): number {
+  // Heurística conservadora: ~4 chars/token.
+  return Math.ceil(text.length / 4);
+}
+
+async function waitForBudget(tokens: number): Promise<void> {
+  for (;;) {
+    const cutoff = Date.now() - WINDOW_MS;
+    while (callHistory.length > 0 && callHistory[0].at < cutoff) {
+      callHistory.shift();
+    }
+    const usedReqs = callHistory.length;
+    let usedTokens = 0;
+    for (const c of callHistory) usedTokens += c.tokens;
+    if (usedReqs < RPM_LIMIT && usedTokens + tokens <= TPM_LIMIT) return;
+    // Espera até a entrada mais antiga sair da janela (+ folga 50ms).
+    const oldest = callHistory[0]?.at ?? Date.now();
+    const wait = Math.max(50, oldest + WINDOW_MS - Date.now() + 50);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+
+async function withThrottle<T>(tokens: number, fn: () => Promise<T>): Promise<T> {
+  // Serializa as decisões de "tem orçamento?" pra evitar race nos counters.
+  const slot = throttleChain.then(() => waitForBudget(tokens));
+  throttleChain = slot.catch(() => undefined);
+  await slot;
+  callHistory.push({ at: Date.now(), tokens });
+  return fn();
+}
+
 export async function embed(
   text: string,
   taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
 ): Promise<number[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY ausente');
-  const res = await fetch(`${ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      content: { parts: [{ text }] },
-      outputDimensionality: DIM,
-      taskType,
-    }),
-  });
+  const tokens = estimateTokens(text);
+  const doFetch = async () => {
+    const res = await fetch(`${ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+        outputDimensionality: DIM,
+        taskType,
+      }),
+    });
+    return res;
+  };
+  let res = await withThrottle(tokens, doFetch);
+  // Retry em 429 com backoff (servidor pode discordar do nosso contador).
+  for (let attempt = 0; attempt < 3 && res.status === 429; attempt++) {
+    const backoff = 2_000 * 2 ** attempt;
+    await new Promise((r) => setTimeout(r, backoff));
+    res = await withThrottle(tokens, doFetch);
+  }
   if (!res.ok) {
     const tx = await res.text().catch(() => '');
     throw new Error(`embed HTTP ${res.status} ${tx.slice(0, 120)}`);

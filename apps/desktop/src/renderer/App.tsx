@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ClaudeSessionStatus,
   ConnState,
   LiveState,
   RendererEvent,
 } from '../shared/ipc.js';
 import type { Widget } from '../shared/widgets.js';
 import type { ClientCommand } from '@assistant/shared';
+import { ClaudeSessionWidget, type SessionView as ClaudeSessionViewLocal } from './components/ClaudeSessionWidget.js';
 import { Orb, type OrbState } from './components/Orb.js';
 import { WidgetCard } from './components/widgets/WidgetCard.js';
 import { ChatPanel } from './components/ChatPanel.js';
@@ -99,6 +101,7 @@ export function App() {
   const [netBw, setNetBw] = useState<{ rx: number; tx: number }>({ rx: 0, tx: 0 });
   const [rxHistory, setRxHistory] = useState<number[]>([]);
   const [txHistory, setTxHistory] = useState<number[]>([]);
+  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionViewLocal[]>([]);
   const orbPaneRef = useRef<HTMLDivElement>(null);
   const micRef = useRef<MicCaptureHandle | null>(null);
   const playerRef = useRef<PcmStreamPlayer | null>(null);
@@ -358,10 +361,60 @@ export function App() {
           });
           break;
         }
+        case 'claude_session_started':
+          setClaudeSessions((prev) => {
+            if (prev.some((s) => s.sessionId === event.session.sessionId)) return prev;
+            return [...prev, { ...event.session, chunks: [] }];
+          });
+          break;
+        case 'claude_session_chunk':
+          setClaudeSessions((prev) =>
+            prev.map((s) =>
+              s.sessionId === event.sessionId
+                ? { ...s, chunks: [...s.chunks, event.chunk].slice(-100) }
+                : s,
+            ),
+          );
+          break;
+        case 'claude_session_status':
+          setClaudeSessions((prev) =>
+            prev.map((s) =>
+              s.sessionId === event.sessionId
+                ? { ...s, status: event.status as ClaudeSessionStatus }
+                : s,
+            ),
+          );
+          break;
+        case 'claude_session_done': {
+          const sessionId = event.sessionId;
+          setClaudeSessions((prev) =>
+            prev.map((s) =>
+              s.sessionId === sessionId
+                ? {
+                    ...s,
+                    status: event.ok ? 'done' : 'failed',
+                    finalText: event.finalText,
+                  }
+                : s,
+            ),
+          );
+          // Auto-close 30s após done.
+          window.setTimeout(() => {
+            setClaudeSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+          }, 30_000);
+          break;
+        }
+        case 'claude_sessions_snapshot':
+          setClaudeSessions(event.sessions.map((s) => ({ ...s, chunks: [] })));
+          break;
       }
     });
     return off;
   }, []);
+
+  function dismissClaudeSession(sessionId: string) {
+    setClaudeSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+  }
 
   // Posiciona o chat-widget no canto direito do orb-pane na 1ª montagem.
   useEffect(() => {
@@ -727,6 +780,18 @@ export function App() {
               />
             </div>
           ))}
+
+          {claudeSessions.length > 0 && (
+            <div className="claude-sessions-stack">
+              {claudeSessions.map((s) => (
+                <ClaudeSessionWidget
+                  key={s.sessionId}
+                  session={s}
+                  onDismiss={dismissClaudeSession}
+                />
+              ))}
+            </div>
+          )}
 
           {memGraphOpen && (
             <div

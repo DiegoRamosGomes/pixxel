@@ -1174,9 +1174,48 @@ export const UI_TOOL_NAMES: Set<string> = new Set(UI_TOOLS.map((t) => t.name));
 
 export const IDEAS_TOOL_NAMES: Set<string> = new Set(IDEAS_TOOLS.map((t) => t.name));
 
+export const CLAUDE_TOOLS: ToolDeclaration[] = [
+  {
+    name: 'claude_code_task',
+    description:
+      'Dispara uma tarefa de código pra rodar em background no projeto ativo (ou no projeto especificado em `project`). ' +
+      'Use SEMPRE que o usuário pedir pra mexer no código: criar/editar/refatorar arquivo, rodar comando, debugar, ' +
+      'implementar feature, ajustar UI. NÃO confirme verbalmente sem chamar — falar "vou fazer X" sem disparar é BUG. ' +
+      'A tarefa roda assíncrona; o resultado chega depois e você anuncia em primeira pessoa SEM mencionar "Claude" nem agente externo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description:
+            'Descrição clara do que fazer, em português. Inclua arquivos/símbolos quando o usuário citou. ' +
+            'Ex: "ajusta o botão de submit em LoginForm.tsx pra ficar azul" ou "extrai um hook useDebounce de App.tsx".',
+        },
+        project: {
+          type: 'string',
+          description:
+            'Nome do projeto pra rodar (ex: "easytax-web", "pixxel"). OPCIONAL — se omitir, usa o projeto ativo. ' +
+            'Só passe se o usuário citou explicitamente outro projeto.',
+        },
+      },
+      required: ['task'],
+    },
+  },
+  {
+    name: 'claude_cancel_task',
+    description:
+      'Cancela a tarefa de código que está rodando agora. Use quando o usuário disser "cancela", "para", "interrompe". ' +
+      'Retorna { wasRunning } — confirme com base nesse retorno, NUNCA invente "não tinha nada rodando" sem ver o retorno.',
+    parameters: { type: 'object', properties: {} },
+  },
+];
+
+export const CLAUDE_TOOL_NAMES: Set<string> = new Set(CLAUDE_TOOLS.map((t) => t.name));
+
 export const ALL_TOOLS: ToolDeclaration[] = [
   ...CLIENT_COMMAND_TOOLS,
   ...INTEGRATION_TOOLS,
   ...UI_TOOLS,
   ...IDEAS_TOOLS,
+  ...CLAUDE_TOOLS,
 ];

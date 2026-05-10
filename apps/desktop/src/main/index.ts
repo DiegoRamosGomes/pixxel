@@ -11,7 +11,9 @@ import {
   ALL_TOOLS,
   UI_TOOL_NAMES,
   IDEAS_TOOL_NAMES,
+  CLAUDE_TOOL_NAMES,
 } from './voice/tool-declarations.js';
+import { getClaudeManager } from './claude/manager.js';
 import { saveIdea } from './integrations/ideas.js';
 import {
   getStudyPlanStore,
@@ -19,6 +21,7 @@ import {
   applyKamilaCuratedVideos,
 } from './integrations/study-plans.js';
 import { getActiveWorkStore } from './integrations/active-work.js';
+import { findProject } from './integrations/projects.js';
 import { executeCommand } from './executor.js';
 import { executeIntegration, INTEGRATION_NAMES } from './integrations/index.js';
 import { deliverFrame, registerFrameRequester } from './integrations/vision.js';
@@ -342,6 +345,33 @@ app.whenReady().then(async () => {
   // Tracker de sessões de trabalho (start_work/end_work) — persistido em
   // ~/pixxel/active-work.json. Briefing matinal lê pra sugerir continuar.
   await getActiveWorkStore().load();
+
+  // Claude Code manager (Fase 1: 1 sessão por vez). Carrega ~/pixxel/sessions.json
+  // e reconcilia órfãs (running com pid morto → crashed).
+  const claudeManager = getClaudeManager();
+  await claudeManager.init();
+  claudeManager.on('session_started', (session) => {
+    emit({ type: 'claude_session_started', session });
+  });
+  claudeManager.on('session_chunk', (sessionId, chunk) => {
+    emit({ type: 'claude_session_chunk', sessionId, chunk });
+  });
+  claudeManager.on('session_status', (sessionId, status) => {
+    emit({ type: 'claude_session_status', sessionId, status });
+  });
+  claudeManager.on('session_done', (sessionId, ok, finalText) => {
+    emit({ type: 'claude_session_done', sessionId, ok, finalText });
+    // Injeta resultado de volta no Live pro Gemini comentar em primeira pessoa.
+    if (live) {
+      const note = ok
+        ? `[Sistema] A tarefa de código que você disparou terminou. Resultado: ${finalText.slice(0, 1500)}. Confirme em PRIMEIRA PESSOA, sem mencionar "Claude" nem agente externo.`
+        : `[Sistema] A tarefa de código que você disparou foi cancelada ou falhou. Avise o usuário em primeira pessoa.`;
+      live.sendText(note);
+    }
+  });
+  shutdownHandlers.push(() => {
+    void claudeManager.shutdown();
+  });
 
   // Esc global = aborta apresentação em curso. Não interfere quando demo não
   // está rodando — o handler só seta a flag, a demo lê e para.
@@ -1093,6 +1123,82 @@ app.whenReady().then(async () => {
             if (pendingStateCheck) {
               clearTimeout(pendingStateCheck);
               pendingStateCheck = null;
+            }
+          }
+
+          // Caminho 0.7: Claude Code task — assíncrono. Dispara no background,
+          // retorna ack curto pro Gemini. Resultado vem por sendText quando termina.
+          if (CLAUDE_TOOL_NAMES.has(call.name)) {
+            if (call.name === 'claude_code_task') {
+              const task = typeof call.args.task === 'string' ? call.args.task.trim() : '';
+              const projectArg = typeof call.args.project === 'string' ? call.args.project.trim() : '';
+              if (!task) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'task obrigatória',
+                });
+                return;
+              }
+              let cwd = activeProjectCwd;
+              let projectName = activeProjectName;
+              if (projectArg) {
+                const found = findProject(projectArg);
+                if (found.ok) {
+                  cwd = found.project.path;
+                  projectName = found.project.name;
+                  setActiveProject(found.project.path, found.project.name);
+                } else {
+                  const altText = found.alternatives?.length
+                    ? ` Candidatos: ${found.alternatives.map((a) => a.name).join(', ')}`
+                    : '';
+                  live?.sendToolResponse(call.id, call.name, {
+                    ok: false,
+                    reason: `${found.reason}${altText}`,
+                  });
+                  return;
+                }
+              }
+              const result = await claudeManager.start({
+                task,
+                cwd,
+                project: projectName,
+              });
+              if (result.ok) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  text: `Disparado em background no projeto ${projectName ?? '(default)'}. Você vai receber o resultado quando terminar.`,
+                  _note:
+                    'A tarefa roda async. Confirme em PRIMEIRA PESSOA o que vai fazer ' +
+                    '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo. ' +
+                    'O resultado chega depois via sendText do sistema.',
+                });
+              } else if (result.reason === 'session_running') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'já tem uma tarefa de código rodando',
+                  _note:
+                    'Avise o usuário em primeira pessoa que tem outra tarefa em andamento ' +
+                    'e pergunte se quer cancelar a atual antes (claude_cancel_task) ou esperar terminar.',
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: result.reason,
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_cancel_task') {
+              const r = await claudeManager.cancel();
+              live?.sendToolResponse(call.id, call.name, {
+                ok: true,
+                wasRunning: r.wasRunning,
+                _note: r.wasRunning
+                  ? 'Cancelado. Confirme em PRIMEIRA PESSOA, sem mencionar "Claude".'
+                  : 'Não havia tarefa rodando. Diga isso em primeira pessoa.',
+              });
+              return;
             }
           }
 

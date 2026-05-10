@@ -5,6 +5,24 @@ export type { Widget } from './widgets.js';
 
 export type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
+export type ClaudeSessionStatus = 'running' | 'done' | 'paused' | 'crashed' | 'failed';
+
+export interface ClaudeSessionView {
+  sessionId: string;
+  cwd: string;
+  project: string | null;
+  taskDescription: string;
+  status: ClaudeSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClaudeSessionChunk {
+  kind: 'assistant' | 'tool_use' | 'tool_result' | 'system' | 'error';
+  text: string;
+  tool?: string;
+}
+
 export type LiveState =
   | { kind: 'idle' }
   | { kind: 'unavailable'; reason: string }
@@ -59,7 +77,12 @@ export type RendererEvent =
       type: 'network_bw';
       rxBytesPerSec: number;
       txBytesPerSec: number;
-    };
+    }
+  | { type: 'claude_session_started'; session: ClaudeSessionView }
+  | { type: 'claude_session_chunk'; sessionId: string; chunk: ClaudeSessionChunk }
+  | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
+  | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string }
+  | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] };
 
 export type AssistantApi = {
   sendText: (text: string) => Promise<void>;

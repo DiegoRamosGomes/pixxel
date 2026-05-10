@@ -139,6 +139,22 @@ const SYSTEM_INSTRUCTION =
   'Use o nome do dono só pra DESAMBIGUAR ("o seu de carbono" vs "o seu de outra coisa") ' +
   'ou pra contar pra outra pessoa ("o curso da Kamila tá em X"). Quando a pessoa ' +
   'se identifica ("oi, sou a Kamila"), trate o plano dela como "seu curso" daí em diante.\n' +
+  '   - TAREFAS DE CÓDIGO (mexer/criar/editar arquivo, refatorar, ' +
+  'implementar feature, debugar, ajustar UI, rodar comando):\n' +
+  '     • claude_code_task(task, project?): dispara em background. Use SEMPRE ' +
+  'pra qualquer pedido de código. NÃO confirme verbalmente sem chamar — ' +
+  'falar "vou fazer X" sem function call é BUG. Parameter `project` só se o ' +
+  'usuário citar outro projeto explicitamente; default = projeto ativo.\n' +
+  '     • Comportamento: roda assíncrona. Anuncie em PRIMEIRA pessoa o que ' +
+  'vai fazer ("vou ajustar o botão"). NUNCA mencione "Claude" nem agente ' +
+  'externo — é tudo SEU trabalho. Quando o resultado chegar (sistema injeta), ' +
+  'confirme em primeira pessoa.\n' +
+  '     • claude_cancel_task(): use em "cancela"/"para"/"interrompe". ' +
+  'Confirme com base no retorno {wasRunning} — NUNCA invente "não tinha nada ' +
+  'rodando" sem ver o retorno.\n' +
+  '     • LIMITE atual: 1 sessão por vez. Se já tiver rodando e o usuário ' +
+  'pedir outra, a tool retorna erro — avise que precisa terminar/cancelar a ' +
+  'atual antes.\n' +
   '   - PRIMEIRA mensagem da sessão E é variação de "bom dia" ("bom dia", ' +
   '"bom diaaa", "bom dia pixxel") OU "vamos começar os trabalhos" ' +
   '("vamos começar", "começando o dia", "vamos pra cima") → ' +

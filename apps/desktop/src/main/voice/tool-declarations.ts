@@ -1181,7 +1181,8 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
       'Dispara uma tarefa de código pra rodar em background no projeto ativo (ou no projeto especificado em `project`). ' +
       'Use SEMPRE que o usuário pedir pra mexer no código: criar/editar/refatorar arquivo, rodar comando, debugar, ' +
       'implementar feature, ajustar UI. NÃO confirme verbalmente sem chamar — falar "vou fazer X" sem disparar é BUG. ' +
-      'A tarefa roda assíncrona; o resultado chega depois e você anuncia em primeira pessoa SEM mencionar "Claude" nem agente externo.',
+      'A tarefa roda assíncrona; o resultado chega depois e você anuncia em primeira pessoa SEM mencionar "Claude" nem agente externo. ' +
+      'CRÍTICO: você DEVE atribuir um score `complexity` 1-10 baseado no risco/escopo da mudança (ver heurísticas no system).',
     parameters: {
       type: 'object',
       properties: {
@@ -1197,8 +1198,74 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
             'Nome do projeto pra rodar (ex: "easytax-web", "pixxel"). OPCIONAL — se omitir, usa o projeto ativo. ' +
             'Só passe se o usuário citou explicitamente outro projeto.',
         },
+        complexity: {
+          type: 'number',
+          description:
+            'Score 1-10 do risco/escopo. 1-3 simples (ajuste pontual, troca de cor/texto, rename). ' +
+            '4-6 médio (extrai componente, adiciona prop, refactor pequeno). ' +
+            '7-10 complexo/destrutivo (refatora arquitetura, migra, deploy, deleta, drop, force push, mexe em vários projetos). ' +
+            'Override por voz: "vai logo" → 1; "calma, mostra o plano antes" → 10. Default: 5.',
+        },
       },
-      required: ['task'],
+      required: ['task', 'complexity'],
+    },
+  },
+  {
+    name: 'claude_approve_plan',
+    description:
+      'Aprova o plano gerado em modo plan-first pra executar de fato. ' +
+      'Use quando, depois de você ter falado o plano por voz, o usuário disser "sim, vai", "aprova", "executa", "manda ver", "pode fazer". ' +
+      'Sem `target`: aprova o único plano pendente. Com vários, target = nome do projeto (fuzzy) ou sessionId UUID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só tem 1 plano awaiting.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_reject_plan',
+    description:
+      'Rejeita o plano (não executa). Use quando o usuário disser "não", "rejeita", "cancela esse plano", "deixa pra lá", ' +
+      '"melhor não", depois de você ter falado o plano. ' +
+      'Sem `target`: rejeita o único pendente. Com vários, target = nome do projeto ou sessionId.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só tem 1 plano awaiting.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_revise_plan',
+    description:
+      'Revisa o plano sem rejeitar nem aprovar — pede ajuste mantendo o contexto da sessão. ' +
+      'Use quando o usuário, depois de você ter falado o plano, disser coisas como: "altera o plano", ' +
+      '"troca biblioteca X por Y", "não mexe no arquivo Z", "ok, mas adiciona migration antes", ' +
+      '"faz só os passos 1 e 2", "mas usa fetch em vez de axios", "ajusta pra fazer X também". ' +
+      'O plano é re-planejado com seu feedback incorporado; a sessão continua awaiting até aprovação final. ' +
+      'Resume preserva contexto — não desperdiça quota re-lendo arquivos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        feedback: {
+          type: 'string',
+          description:
+            'Texto literal do que o usuário quer mudar no plano (em português, pode ser informal). ' +
+            'Ex: "não mexe no arquivo de auth", "usa biblioteca Y em vez de Z", "adiciona passo de migration antes".',
+        },
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId. Omita se só tem 1 plano awaiting.',
+        },
+      },
+      required: ['feedback'],
     },
   },
   {

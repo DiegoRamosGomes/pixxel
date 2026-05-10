@@ -385,6 +385,15 @@ export function App() {
             ),
           );
           break;
+        case 'claude_session_plan_ready':
+          setClaudeSessions((prev) =>
+            prev.map((s) =>
+              s.sessionId === event.sessionId
+                ? { ...s, status: 'awaiting_approval', pendingPlan: event.plan }
+                : s,
+            ),
+          );
+          break;
         case 'claude_session_done': {
           const sessionId = event.sessionId;
           setClaudeSessions((prev) =>

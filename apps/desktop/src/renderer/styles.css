@@ -2364,3 +2364,25 @@ button.status-item--btn:disabled {
   padding-top: 4px;
   border-top: 1px dashed rgba(134, 239, 172, 0.3);
 }
+
+.claude-session__plan {
+  color: #d8b4fe;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  border-radius: 6px;
+  background: rgba(168, 85, 247, 0.08);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.claude-session__plan-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 9px;
+  color: #c084fc;
+  margin-bottom: 4px;
+  font-weight: 600;
+}

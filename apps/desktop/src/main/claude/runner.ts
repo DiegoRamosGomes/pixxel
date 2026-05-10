@@ -10,7 +10,7 @@ const PIXXEL_PROJECT_PATHS = [
   '/home/diego/Projects/dk/assistant',
 ];
 
-export type PermissionMode = 'acceptEdits' | 'bypassPermissions';
+export type PermissionMode = 'acceptEdits' | 'bypassPermissions' | 'plan';
 
 export interface RunnerOptions {
   task: string;
@@ -21,6 +21,8 @@ export interface RunnerOptions {
   resume?: boolean;
   /** Append no system prompt — usado pra injetar memória/contexto. */
   appendSystemPrompt?: string;
+  /** Override do permission mode (default: pixxel project → bypass, outros → acceptEdits). */
+  permissionMode?: PermissionMode;
 }
 
 export interface RunnerEvents {
@@ -50,7 +52,7 @@ export class ClaudeRunner extends EventEmitter {
 
   start(opts: RunnerOptions): void {
     if (this.child) throw new Error('runner já rodando');
-    const permissionMode = pickPermissionMode(opts.cwd);
+    const permissionMode = opts.permissionMode ?? pickPermissionMode(opts.cwd);
     const args = [
       '-p',
       opts.task,

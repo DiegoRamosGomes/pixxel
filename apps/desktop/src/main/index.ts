@@ -371,6 +371,19 @@ app.whenReady().then(async () => {
       live.sendText(note);
     }
   });
+  claudeManager.on('plan_ready', (sessionId, project, plan) => {
+    emit({ type: 'claude_session_plan_ready', sessionId, project, plan });
+    if (live) {
+      const projectLabel = project ? ` no projeto ${project}` : '';
+      const note =
+        `[Sistema] Plan-mode terminou${projectLabel}. Plano proposto:\n\n${plan.slice(0, 2000)}\n\n` +
+        `INSTRUÇÃO: fale o plano resumido por voz em 1ª pessoa ("o plano é: ...; ` +
+        `posso prosseguir?") e ESPERE resposta. NUNCA mencione "Claude" nem agente externo. ` +
+        `sessionId=${sessionId}. Se o usuário aprovar (sim/vai/aprova) → ` +
+        `claude_approve_plan(). Se rejeitar (não/deixa/rejeita) → claude_reject_plan().`;
+      live.sendText(note);
+    }
+  });
   shutdownHandlers.push(() => {
     void claudeManager.shutdown();
   });
@@ -1160,33 +1173,188 @@ app.whenReady().then(async () => {
                   return;
                 }
               }
+              const complexityRaw = typeof call.args.complexity === 'number'
+                ? call.args.complexity
+                : Number(call.args.complexity);
+              const complexity = Number.isFinite(complexityRaw)
+                ? Math.min(10, Math.max(1, Math.round(complexityRaw)))
+                : 5;
               const result = await claudeManager.start({
                 task,
                 cwd,
                 project: projectName,
+                complexity,
               });
+              const projLabel = projectName ?? '(default)';
               if (result.ok && result.queued) {
+                const modeLabel = result.mode === 'plan' ? 'plan-mode (vou planejar antes)' : 'execute';
                 live?.sendToolResponse(call.id, call.name, {
                   ok: true,
                   queued: true,
                   position: result.position,
-                  text: `Enfileirado no projeto ${projectName ?? '(default)'} (posição ${result.position}). Já tem 3 rodando.`,
+                  mode: result.mode,
+                  text: `Enfileirado em ${modeLabel} no projeto ${projLabel} (posição ${result.position}). Já tem 3 rodando.`,
                   _note:
                     'Avise em 1ª pessoa que vai enfileirar e cite a posição. ' +
+                    (result.mode === 'plan'
+                      ? 'Mencione que essa tarefa vai passar por plano antes de executar (complexity ≥ 7). '
+                      : '') +
                     'Não mencione "Claude" nem agente externo.',
                 });
               } else if (result.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Disparado em background no projeto ${projectName ?? '(default)'}. Você vai receber o resultado quando terminar.`,
-                  _note:
-                    'A tarefa roda async. Confirme em PRIMEIRA PESSOA o que vai fazer ' +
-                    '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo.',
-                });
+                if (result.mode === 'plan') {
+                  live?.sendToolResponse(call.id, call.name, {
+                    ok: true,
+                    mode: 'plan',
+                    text: `Iniciei planejamento no projeto ${projLabel} (tarefa complexa). Vou te mostrar o plano antes de executar.`,
+                    _note:
+                      'Avise em 1ª pessoa que vai PLANEJAR primeiro porque a tarefa é complexa, ' +
+                      'e que vai apresentar o plano em alguns segundos pra aprovação. ' +
+                      'NÃO mencione "Claude" nem agente externo.',
+                  });
+                } else {
+                  live?.sendToolResponse(call.id, call.name, {
+                    ok: true,
+                    mode: 'execute',
+                    text: `Disparado em background no projeto ${projLabel}.`,
+                    _note:
+                      'A tarefa roda async. Confirme em 1ª pessoa o que vai fazer ' +
+                      '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo.',
+                  });
+                }
               } else {
                 live?.sendToolResponse(call.id, call.name, {
                   ok: false,
                   reason: result.reason,
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_approve_plan') {
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string } = {};
+              if (target) {
+                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
+                else targetParam.project = target;
+              }
+              const r = await claudeManager.approvePlan(targetParam);
+              if (r.ok) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  text: `Aprovado. Executando o plano no projeto ${r.session.project ?? '(default)'}.`,
+                  _note:
+                    'Confirme em 1ª pessoa que aprovou e tá executando agora. ' +
+                    'Não mencione "Claude". O resultado virá depois via sistema.',
+                });
+              } else if (r.reason === 'no_awaiting') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_awaiting',
+                  text: 'Não tem nenhum plano aguardando aprovação.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  awaiting: r.awaiting,
+                  text: `Tem ${(r.awaiting ?? []).length} planos aguardando: ${list}. Pergunte qual aprovar.`,
+                  _note:
+                    'Liste os projetos pro usuário em 1ª pessoa e espere a resposta. ' +
+                    'Quando ele disser, chame de novo com target=<nome>.',
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: r.reason,
+                  text: `Não consegui aprovar: ${r.detail ?? r.reason}.`,
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_revise_plan') {
+              const feedback = typeof call.args.feedback === 'string' ? call.args.feedback.trim() : '';
+              if (!feedback) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'feedback obrigatório',
+                });
+                return;
+              }
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string } = {};
+              if (target) {
+                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
+                else targetParam.project = target;
+              }
+              const r = await claudeManager.revisePlan(feedback, targetParam);
+              if (r.ok) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  text: `Revisando plano no projeto ${r.session.project ?? '(default)'} com o feedback.`,
+                  _note:
+                    'Avise em 1ª pessoa que vai ajustar o plano com o feedback ' +
+                    '(ex: "tá, vou refazer o plano com isso, um segundo"). NÃO mencione "Claude". ' +
+                    'Quando o plano novo chegar via sistema, fale e pergunte de novo.',
+                });
+              } else if (r.reason === 'no_awaiting') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_awaiting',
+                  text: 'Não tem nenhum plano aguardando pra revisar.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  awaiting: r.awaiting,
+                  text: `Tem planos aguardando: ${list}. Pergunte qual revisar.`,
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: r.reason,
+                  text: `Não consegui revisar: ${r.detail ?? r.reason}.`,
+                });
+              }
+              return;
+            }
+
+            if (call.name === 'claude_reject_plan') {
+              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
+              const targetParam: { sessionId?: string; project?: string } = {};
+              if (target) {
+                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
+                else targetParam.project = target;
+              }
+              const r = await claudeManager.rejectPlan(targetParam);
+              if (r.ok) {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: true,
+                  text: `Plano rejeitado no projeto ${r.session.project ?? '(default)'}.`,
+                  _note: 'Confirme em 1ª pessoa que rejeitou. Não mencione "Claude".',
+                });
+              } else if (r.reason === 'no_awaiting') {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'no_awaiting',
+                  text: 'Não tem nenhum plano aguardando.',
+                });
+              } else if (r.reason === 'ambiguous') {
+                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: 'ambiguous',
+                  awaiting: r.awaiting,
+                  text: `Tem planos aguardando: ${list}. Pergunte qual rejeitar.`,
+                });
+              } else {
+                live?.sendToolResponse(call.id, call.name, {
+                  ok: false,
+                  reason: r.reason,
                 });
               }
               return;

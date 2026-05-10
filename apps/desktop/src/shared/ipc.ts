@@ -5,7 +5,13 @@ export type { Widget } from './widgets.js';
 
 export type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
-export type ClaudeSessionStatus = 'running' | 'done' | 'paused' | 'crashed' | 'failed';
+export type ClaudeSessionStatus =
+  | 'running'
+  | 'done'
+  | 'paused'
+  | 'crashed'
+  | 'failed'
+  | 'awaiting_approval';
 
 export interface ClaudeSessionView {
   sessionId: string;
@@ -15,6 +21,7 @@ export interface ClaudeSessionView {
   status: ClaudeSessionStatus;
   createdAt: string;
   updatedAt: string;
+  complexity?: number;
 }
 
 export interface ClaudeSessionChunk {
@@ -82,6 +89,7 @@ export type RendererEvent =
   | { type: 'claude_session_chunk'; sessionId: string; chunk: ClaudeSessionChunk }
   | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
   | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string; project: string | null; cancelled: boolean }
+  | { type: 'claude_session_plan_ready'; sessionId: string; project: string | null; plan: string }
   | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] };
 
 export type AssistantApi = {

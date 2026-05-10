@@ -1,4 +1,10 @@
-export type SessionStatus = 'running' | 'done' | 'paused' | 'crashed' | 'failed';
+export type SessionStatus =
+  | 'running'
+  | 'done'
+  | 'paused'
+  | 'crashed'
+  | 'failed'
+  | 'awaiting_approval';
 
 export interface ClaudeSession {
   sessionId: string;
@@ -9,7 +15,11 @@ export interface ClaudeSession {
   createdAt: string;
   updatedAt: string;
   pid: number | null;
-  permissionMode: 'acceptEdits' | 'bypassPermissions';
+  permissionMode: 'acceptEdits' | 'bypassPermissions' | 'plan';
+  /** Score 1-10 atribuído pelo Gemini ao chamar claude_code_task. */
+  complexity?: number;
+  /** Plano gerado em modo plan, esperando aprovação. */
+  pendingPlan?: string;
 }
 
 export interface ClaudeOutputChunk {

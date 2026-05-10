@@ -4,6 +4,7 @@ import type { ClaudeSessionChunk, ClaudeSessionStatus, ClaudeSessionView } from 
 export interface SessionView extends ClaudeSessionView {
   chunks: ClaudeSessionChunk[];
   finalText?: string;
+  pendingPlan?: string;
 }
 
 export interface ClaudeSessionWidgetProps {
@@ -17,6 +18,7 @@ const STATUS_LABEL: Record<ClaudeSessionStatus, string> = {
   paused: 'pausado',
   crashed: 'caiu',
   failed: 'falhou',
+  awaiting_approval: 'aguardando',
 };
 
 const STATUS_COLOR: Record<ClaudeSessionStatus, string> = {
@@ -25,6 +27,7 @@ const STATUS_COLOR: Record<ClaudeSessionStatus, string> = {
   paused: '#f59e0b',
   crashed: '#ef4444',
   failed: '#ef4444',
+  awaiting_approval: '#a855f7',
 };
 
 export function ClaudeSessionWidget({ session, onDismiss }: ClaudeSessionWidgetProps) {
@@ -70,6 +73,12 @@ export function ClaudeSessionWidget({ session, onDismiss }: ClaudeSessionWidgetP
         {session.chunks.map((chunk, i) => (
           <ChunkLine key={i} chunk={chunk} />
         ))}
+        {session.status === 'awaiting_approval' && session.pendingPlan && (
+          <div className="claude-session__plan">
+            <div className="claude-session__plan-label">plano (aguardando aprovação)</div>
+            {session.pendingPlan}
+          </div>
+        )}
         {session.finalText && session.status === 'done' && (
           <div className="claude-session__final">{session.finalText}</div>
         )}

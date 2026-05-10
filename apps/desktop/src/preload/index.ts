@@ -9,11 +9,6 @@ const api: AssistantApi = {
   liveSendAudio: (pcm16k) => ipcRenderer.send('assistant:live-audio', pcm16k),
   liveSendText: (text) => ipcRenderer.invoke('assistant:live-send-text', text),
   liveEndTurn: () => ipcRenderer.send('assistant:live-end-turn'),
-  claudeStart: (prompt) => ipcRenderer.invoke('assistant:claude-start', prompt),
-  claudeCancel: () => ipcRenderer.invoke('assistant:claude-cancel'),
-  claudePermissionResponse: (requestId, allowed) =>
-    ipcRenderer.send('assistant:claude-permission-response', requestId, allowed),
-  claudeResetSession: () => ipcRenderer.invoke('assistant:claude-reset-session'),
   windowClose: () => ipcRenderer.send('assistant:window-close'),
   windowMinimize: () => ipcRenderer.send('assistant:window-minimize'),
   windowMaximizeToggle: () => ipcRenderer.send('assistant:window-maximize-toggle'),

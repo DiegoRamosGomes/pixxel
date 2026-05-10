@@ -14,56 +14,6 @@ export type LiveState =
   | { kind: 'error'; code: string; message: string }
   | { kind: 'closed'; reason: string };
 
-export type ClaudeState =
-  | { kind: 'idle' }
-  | { kind: 'starting' }
-  | { kind: 'running' }
-  | { kind: 'done' }
-  | { kind: 'error'; reason: string };
-
-export type ClaudePermissionRequest = {
-  requestId: string;
-  tool: string;
-  input: Record<string, unknown>;
-  summary: string;
-};
-
-export type ClaudeQuota = {
-  /** Custo (USD) já usado nesta janela. */
-  usedUSD: number;
-  /** Limite total da janela (USD), calibrado pelos env vars. */
-  limitUSD: number;
-  /** usedUSD / limitUSD * 100, capado em 100. */
-  percent: number;
-  /** Quando reseta — ISO string ou descrição curta tipo "5d". */
-  resetsAt?: string;
-  /** Texto humano "1h 57m" ou "5d". */
-  resetsIn?: string;
-};
-
-export type ClaudeUsage = {
-  windowStart: string;
-  windowEnd: string;
-  costUSD: number;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  models: string[];
-  burnRate?: { tokensPerMinute: number; costPerHour: number };
-  projection?: {
-    totalTokens: number;
-    totalCost: number;
-    remainingMinutes: number;
-  };
-  /** Quotas calibradas com base no que o Claude Code mostra no VSCode.
-   *  Cada uma é só presente se o env var correspondente estiver definido. */
-  session?: ClaudeQuota;
-  weekly?: ClaudeQuota;
-  weeklySonnet?: ClaudeQuota;
-};
-
 export type RendererEvent =
   | { type: 'conn'; state: ConnState; reason?: string }
   | { type: 'assistant_start'; messageId: string; model: string }
@@ -86,15 +36,7 @@ export type RendererEvent =
   | { type: 'live_transcript'; role: 'user' | 'model'; text: string }
   | { type: 'widget'; id: string; widget: Widget; ttlMs: number }
   | { type: 'widget_dismiss'; id: string }
-  | { type: 'claude_state'; state: ClaudeState }
-  | { type: 'claude_text'; delta: string }
-  | { type: 'claude_tool_use'; tool: string; input: unknown }
-  | { type: 'claude_permission_request'; request: ClaudePermissionRequest }
-  | { type: 'claude_permission_resolved'; requestId: string; allowed: boolean }
-  | { type: 'claude_result'; ok: boolean; text: string }
-  | { type: 'claude_usage'; usage: ClaudeUsage | null }
-  | { type: 'claude_active_project'; path: string; name: string | null }
-  | { type: 'claude_queue'; tasks: string[] }
+  | { type: 'active_project'; path: string; name: string | null }
   | { type: 'ui_panel'; panel: 'chat' | 'memory_graph' | 'camera'; open: boolean }
   | { type: 'request_camera_frame'; requestId: string }
   | {
@@ -127,23 +69,6 @@ export type AssistantApi = {
   liveSendAudio: (pcm16k: ArrayBuffer) => void;
   liveSendText: (text: string) => Promise<{ ok: boolean; reason?: string }>;
   liveEndTurn: () => void;
-  claudeStart: (prompt: string) => Promise<{
-    ok: boolean;
-    reason?: string;
-    /** True se foi enfileirada (Claude já estava rodando outra). */
-    queued?: boolean;
-    /** Posição na fila (1 = próxima a rodar) quando queued=true. */
-    position?: number;
-    /** Quando reason='session_open': metadata pra UI mostrar diálogo. */
-    conflict?: {
-      description: string;
-      kind: string;
-      age: string;
-    };
-  }>;
-  claudeCancel: () => Promise<void>;
-  claudePermissionResponse: (requestId: string, allowed: boolean) => void;
-  claudeResetSession: () => Promise<void>;
   windowClose: () => void;
   windowMinimize: () => void;
   windowMaximizeToggle: () => void;

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 
-// IDEIAS.md fica na raiz do monorepo. Mesma lógica do CLAUDE_PROJECT_DIR
+// IDEIAS.md fica na raiz do monorepo. Mesma lógica do PIXXEL_PROJECT_DIR
 // default: sobe de apps/desktop/out/main até dk/assistant/.
 const REPO_ROOT = pathResolve(__dirname, '../../../..');
 const IDEAS_FILE = pathResolve(REPO_ROOT, 'IDEIAS.md');
@@ -21,7 +21,7 @@ export type SaveIdeaResult = {
   ok: true;
   path: string;
   status: IdeaStatus;
-  /** Anchor em markdown da entrada criada — útil pra Claude editar depois. */
+  /** Anchor em markdown da entrada criada — útil pra editar depois. */
   anchor: string;
 } | {
   ok: false;

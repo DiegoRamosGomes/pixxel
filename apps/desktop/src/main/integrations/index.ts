@@ -354,8 +354,7 @@ export async function executeIntegration(
       if (!query) return { ok: false, reason: 'query vazia' };
       const r = await openProject(query);
       if (r.ok) {
-        // Inclui o path no meta pra o main marcar este como projeto ativo
-        // do claude_code_task (Gemini delega edições no projeto recém-aberto).
+        // Inclui o path no meta pra o main marcar este como projeto ativo.
         return {
           ok: true,
           text: r.text,
@@ -831,18 +830,16 @@ export async function executeIntegration(
           // antes. Devolve metadata pra ele saber o que tá aberto.
           const cur = r.current;
           const age = formatRelativeAge(cur.startedAt);
-          const kindLabel = cur.kind === 'code' ? 'tarefa de código' : 'sessão';
           return {
             ok: false,
             reason: 'session_open',
             text:
-              `[Conflito] Já tem uma ${kindLabel} aberta: "${cur.description}" ` +
+              `[Conflito] Já tem uma sessão aberta: "${cur.description}" ` +
               `(${age}). Pergunte ao usuário em primeira pessoa se quer pausar ` +
               `(salva o estado pra retomar depois) ou interromper (descarta) ` +
               `a atual antes de começar a nova "${description}". Quando ele ` +
               `responder, chame pause_current_work ou interrupt_current_work, ` +
-              `e DEPOIS chame start_work de novo. NUNCA mencione "Claude" — ` +
-              `é tudo VOCÊ trabalhando.`,
+              `e DEPOIS chame start_work de novo.`,
           };
         }
         return { ok: false, reason: r.reason ?? 'falhou' };
@@ -926,10 +923,9 @@ export async function executeIntegration(
       if (cur) {
         const age = formatRelativeAge(cur.startedAt);
         const projectInfo = cur.projectName ? ` no projeto ${cur.projectName}` : '';
-        const kindLabel = cur.kind === 'code' ? 'tarefa de código' : 'sessão';
         const lastStepInfo = cur.lastStep ? ` Última ação: ${cur.lastStep}.` : '';
         parts.push(
-          `Em andamento — ${kindLabel}: "${cur.description}"${projectInfo}, ` +
+          `Em andamento — sessão: "${cur.description}"${projectInfo}, ` +
           `há ${age}${cur.clickupTaskId ? ` (ClickUp: ${cur.clickupTaskId})` : ''}.${lastStepInfo}`,
         );
       }

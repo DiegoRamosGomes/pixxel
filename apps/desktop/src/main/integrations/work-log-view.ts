@@ -100,7 +100,7 @@ export async function listWorkLogs(limit: number): Promise<{
     const when = e.date ? new Date(e.date).toLocaleString('pt-BR') : '?';
     return `${i + 1}. ${status} ${proj} — ${task}  _(${when})_`;
   });
-  const text = `Últimas ${entries.length} sessões do Claude:\n${lines.join('\n')}`;
+  const text = `Últimas ${entries.length} sessões de trabalho:\n${lines.join('\n')}`;
   return { ok: true, text, entries };
 }
 

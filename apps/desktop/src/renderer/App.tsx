@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ClaudePermissionRequest,
-  ClaudeState,
-  ClaudeUsage,
   ConnState,
   LiveState,
   RendererEvent,
@@ -11,14 +8,12 @@ import type { Widget } from '../shared/widgets.js';
 import type { ClientCommand } from '@assistant/shared';
 import { Orb, type OrbState } from './components/Orb.js';
 import { WidgetCard } from './components/widgets/WidgetCard.js';
-import { ClaudePanel, type ClaudeMessage } from './components/ClaudePanel.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import { MemoryGraphPanel } from './components/MemoryGraphPanel.js';
 import { CameraPanel } from './components/CameraPanel.js';
 import { HandMouseController } from './components/HandMouseController.js';
 import { DevicePicker } from './components/DevicePicker.js';
 import { useMediaDevices } from './hooks/useMediaDevices.js';
-import { ClaudeUsagePill } from './components/ClaudeUsagePill.js';
 import { Sidebar } from './components/Sidebar.js';
 import { OrbControls } from './components/OrbControls.js';
 import { startMicCapture, type MicCaptureHandle } from './audio/mic-capture.js';
@@ -86,21 +81,6 @@ export function App() {
     z: number;
   };
   const [widgets, setWidgets] = useState<StackItem[]>([]);
-  const [claudeOpen, setClaudeOpen] = useState(false);
-  const [claudeState, setClaudeState] = useState<ClaudeState>({ kind: 'idle' });
-  const [claudeMessages, setClaudeMessages] = useState<ClaudeMessage[]>([]);
-  const [claudePending, setClaudePending] = useState<ClaudePermissionRequest | null>(null);
-  // Fila de tarefas pendentes — espelhada do main via evento `claude_queue`.
-  // Renderer NUNCA muta isso direto; só lê. main é a fonte da verdade.
-  const [claudeQueue, setClaudeQueue] = useState<string[]>([]);
-  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
-  const [claudeZ, setClaudeZ] = useState(11);
-  const [claudeInitialPos, setClaudeInitialPos] = useState({ x: 24, y: 24 });
-  const claudeAutoCloseTimerRef = useRef<number | null>(null);
-  const [claudeProject, setClaudeProject] = useState<{ path: string; name: string | null }>({
-    path: '',
-    name: null,
-  });
   const [sysMetrics, setSysMetrics] = useState<{
     cpuPercent: number;
     memUsedBytes: number;
@@ -128,9 +108,6 @@ export function App() {
   // Contadores pra z-index incremental e rotação de cantos.
   const widgetZRef = useRef(10);
   const widgetSpawnIdxRef = useRef(0);
-  // ID da mensagem assistente do Claude em construção. Mantido em ref pra não
-  // causar re-render. Reseta no fim de cada execução.
-  const claudeStreamingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
@@ -325,99 +302,6 @@ export function App() {
           }
           break;
         }
-        case 'claude_state':
-          setClaudeState(event.state);
-          if (
-            event.state.kind === 'idle' ||
-            event.state.kind === 'done' ||
-            event.state.kind === 'error'
-          ) {
-            claudeStreamingIdRef.current = null;
-          }
-          if (event.state.kind === 'starting' || event.state.kind === 'running') {
-            // Garante painel aberto quando Live (fase 2) disparar via tool —
-            // qualquer estado "ativo" cobre o caso do `starting` ter passado
-            // batido (timing). Bumpa z pra garantir que vem pra frente, senão
-            // fica atrás do ChatPanel que sobe a cada toggle.
-            setClaudeOpen(true);
-            setClaudeZ((z) => Math.max(z, widgetZRef.current) + 1);
-          }
-          break;
-        case 'claude_text': {
-          const id = claudeStreamingIdRef.current;
-          if (id) {
-            setClaudeMessages((prev) =>
-              prev.map((m) =>
-                m.id === id && m.kind === 'assistant'
-                  ? { ...m, text: m.text + event.delta }
-                  : m,
-              ),
-            );
-          } else {
-            const newId = crypto.randomUUID();
-            claudeStreamingIdRef.current = newId;
-            setClaudeMessages((prev) => [
-              ...prev,
-              { id: newId, kind: 'assistant', text: event.delta, streaming: true },
-            ]);
-          }
-          break;
-        }
-        case 'claude_tool_use':
-          setClaudeOpen(true);
-          setClaudeZ((z) => Math.max(z, widgetZRef.current) + 1);
-          // Fecha streaming corrente — texto e tool_use vêm em blocos separados
-          // num mesmo turno do claude.
-          claudeStreamingIdRef.current = null;
-          setClaudeMessages((prev) => {
-            const updated = prev.map((m) =>
-              m.kind === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
-            );
-            return [
-              ...updated,
-              {
-                id: crypto.randomUUID(),
-                kind: 'tool',
-                tool: event.tool,
-                input: event.input,
-              },
-            ];
-          });
-          break;
-        case 'claude_permission_request':
-          setClaudePending(event.request);
-          setClaudeOpen(true);
-          // CRÍTICO: bumpa z senão a PermissionCard renderiza atrás do
-          // ChatPanel e o usuário não vê — Claude expira em 60s e o pedido
-          // fica como "negado por timeout".
-          setClaudeZ((z) => Math.max(z, widgetZRef.current) + 1);
-          break;
-        case 'claude_permission_resolved':
-          // Emitido quando a decisão veio por voz (Gemini chamando
-          // claude_permission_decide). Garante que o card fecha. O caminho
-          // do botão local já limpa direto no handler do click.
-          setClaudePending((curr) =>
-            curr && curr.requestId === event.requestId ? null : curr,
-          );
-          break;
-        case 'claude_result':
-          claudeStreamingIdRef.current = null;
-          setClaudeMessages((prev) => {
-            const updated = prev.map((m) =>
-              m.kind === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
-            );
-            if (!event.ok) {
-              return [
-                ...updated,
-                { id: crypto.randomUUID(), kind: 'error', text: event.text },
-              ];
-            }
-            return updated;
-          });
-          break;
-        case 'claude_usage':
-          setClaudeUsage(event.usage);
-          break;
         case 'ui_panel':
           if (event.panel === 'chat') {
             setChatOpen(event.open);
@@ -438,11 +322,9 @@ export function App() {
             }
           }
           break;
-        case 'claude_active_project':
-          setClaudeProject({ path: event.path, name: event.name });
-          break;
-        case 'claude_queue':
-          setClaudeQueue(event.tasks);
+        case 'active_project':
+          // Projeto ativo (definido por open_project). Renderer ignora por
+          // enquanto — sem UI específica.
           break;
         case 'system_metrics': {
           const snap = {
@@ -491,36 +373,6 @@ export function App() {
       y: 24,
     });
   }, []);
-
-  // Auto-close do ClaudePanel: fica aberto enquanto starting/running, e fecha
-  // sozinho após `done` (5s pra ler resultado). Em `error`, fica aberto até
-  // o usuário fechar.
-  useEffect(() => {
-    if (claudeAutoCloseTimerRef.current != null) {
-      window.clearTimeout(claudeAutoCloseTimerRef.current);
-      claudeAutoCloseTimerRef.current = null;
-    }
-    if (claudeState.kind === 'starting' || claudeState.kind === 'running') {
-      // Posiciona no canto superior-esquerdo do orb-pane na primeira abertura
-      // (drag posterior preserva a posição até o componente desmontar).
-      const pane = orbPaneRef.current;
-      if (pane) {
-        setClaudeInitialPos({ x: 24, y: 24 });
-      }
-      setClaudeOpen(true);
-    } else if (claudeState.kind === 'done' || claudeState.kind === 'error') {
-      // Auto-close só se a fila do main estiver vazia. Se tem mais tarefas
-      // pendentes, o main vai disparar a próxima sozinho via tryDequeue.
-      // Em error usa janela maior pra dar tempo de ler o motivo.
-      if (claudeQueue.length > 0) return;
-      const delayMs = claudeState.kind === 'error' ? 10000 : 5000;
-      claudeAutoCloseTimerRef.current = window.setTimeout(() => {
-        setClaudeOpen(false);
-        claudeAutoCloseTimerRef.current = null;
-      }, delayMs);
-    }
-    // idle → não força nada (idle não abre nem fecha)
-  }, [claudeState.kind, claudeQueue.length]);
 
   function dismissWidget(id: string) {
     setWidgets((prev) => prev.filter((w) => w.id !== id));
@@ -722,46 +574,6 @@ export function App() {
     }
   }
 
-  function onToggleClaude() {
-    setClaudeOpen((v) => !v);
-  }
-
-  async function onClaudeSend(prompt: string) {
-    // Sempre delega pro main. Se Claude tá ocupado, main enfileira e devolve
-    // {queued:true,position}. Se idle, dispara já e devolve {ok:true}.
-    setClaudeMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), kind: 'user', text: prompt },
-    ]);
-    const res = await window.assistant.claudeStart(prompt);
-    if (!res.ok) {
-      setClaudeMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          kind: 'error',
-          text: res.reason ?? 'falhou ao iniciar',
-        },
-      ]);
-    }
-  }
-
-  async function onClaudeCancel() {
-    await window.assistant.claudeCancel();
-  }
-
-  async function onClaudeResetSession() {
-    await window.assistant.claudeResetSession();
-    setClaudeMessages([]);
-    claudeStreamingIdRef.current = null;
-  }
-
-  function onClaudePermissionDecide(allowed: boolean) {
-    if (!claudePending) return;
-    window.assistant.claudePermissionResponse(claudePending.requestId, allowed);
-    setClaudePending(null);
-  }
-
   const liveActive =
     live.kind === 'connecting' || live.kind === 'ready' || live.kind === 'speaking';
   const liveReady = live.kind === 'ready' || live.kind === 'speaking';
@@ -811,7 +623,6 @@ export function App() {
   return (
     <div className="app">
       <Sidebar
-        claudeUsage={claudeUsage}
         metrics={sysMetrics}
         cpuHistory={cpuHistory}
         topProcesses={topProcesses}
@@ -916,29 +727,6 @@ export function App() {
               />
             </div>
           ))}
-
-          {claudeOpen && (
-            <div
-              className="widget-slot widget-slot--claude"
-              style={{ zIndex: claudeZ }}
-            >
-              <ClaudePanel
-                state={claudeState}
-                messages={claudeMessages}
-                project={claudeProject}
-                initialX={claudeInitialPos.x}
-                initialY={claudeInitialPos.y}
-                pending={claudePending}
-                queued={claudeQueue.length > 0 ? claudeQueue.join('\n') : null}
-                onSend={onClaudeSend}
-                onPermissionDecide={onClaudePermissionDecide}
-                onCancel={onClaudeCancel}
-                onClose={() => setClaudeOpen(false)}
-                onResetSession={onClaudeResetSession}
-                onActivate={() => setClaudeZ((z) => Math.max(z, widgetZRef.current) + 1)}
-              />
-            </div>
-          )}
 
           {memGraphOpen && (
             <div

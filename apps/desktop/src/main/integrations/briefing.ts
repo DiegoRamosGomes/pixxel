@@ -16,7 +16,6 @@ import {
 } from './clickup.js';
 import { getActiveWorkStore, formatRelativeAge } from './active-work.js';
 import { getStorageStatus, type DiskInfo } from './storage.js';
-import { getCurrentClaudeUsage } from '../services/claude-usage.js';
 import type { Widget, StorageWidget } from '../../shared/widgets.js';
 
 const STATE_DIR = join(homedir(), 'pixxel', 'state');
@@ -246,16 +245,6 @@ async function fetchStorage(): Promise<{ line: string; disks: DiskInfo[] }> {
   }
 }
 
-function narrateClaudeUsage(): string {
-  const usage = getCurrentClaudeUsage();
-  if (!usage) return '';
-  const parts: string[] = [];
-  if (usage.session) parts.push(`sessão de 5h em ${usage.session.percent}%`);
-  if (usage.weekly) parts.push(`semana em ${usage.weekly.percent}%`);
-  if (parts.length === 0) return '';
-  return `Uso do Claude: ${parts.join(', ')}.`;
-}
-
 const MOTIVATIONAL = [
   'O segredo de avançar é começar.',
   'Disciplina é fazer o que precisa ser feito mesmo quando não tá afim.',
@@ -369,8 +358,6 @@ export async function buildMorningBriefing(): Promise<{
   }
 
   if (storageLine) parts.push(storageLine);
-  const claudeLine = narrateClaudeUsage();
-  if (claudeLine) parts.push(claudeLine);
 
   // Em feriado nacional ou fim de semana o nudge "quer continuar?" vira ruído — pula.
   if (isHoliday) {

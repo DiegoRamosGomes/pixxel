@@ -715,9 +715,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
       'Use quando o usuário disser coisas como "abre o projeto X", ' +
       '"abre o repo da empresa Y", "abre a pasta Z no vscode". ' +
       'Faz busca fuzzy no diretório de projetos do usuário e abre o melhor match. ' +
-      'Se não achar, retorna lista de alternativas. ' +
-      'IMPORTANTE: depois de abrir um projeto, ele vira o "projeto ativo" — ' +
-      'qualquer claude_code_task subsequente vai operar nele.',
+      'Se não achar, retorna lista de alternativas.',
     parameters: {
       type: 'object',
       properties: {
@@ -729,62 +727,6 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
         },
       },
       required: ['query'],
-    },
-  },
-  {
-    name: 'claude_usage_status',
-    description:
-      'Status atual de uso do Claude Code (vem do ccusage local, sem rede). ' +
-      'USE quando o usuário perguntar sobre uso/consumo/quota/limite do Claude: ' +
-      '"quanto já usei do Claude", "como tá meu uso", "quanto falta da minha ' +
-      'sessão", "quanto da semana eu já gastei", "tá perto do limite?", ' +
-      '"quanto custou hoje", "quantos tokens", "qual o burn rate", "quando ' +
-      'reseta minha sessão/semana", "quais modelos eu usei". ' +
-      'O retorno traz TUDO: porcentagens da sessão de 5h e da semana (total + ' +
-      'Sonnet), custo USD, tokens (input/output/cache), burn rate, projeção, ' +
-      'modelos usados, timestamps de reset. ' +
-      'POR PADRÃO fale só: porcentagem da sessão de 5h + porcentagem semanal + ' +
-      'quando cada uma reseta. Resposta curta tipo "sessão tá em 42%, reseta ' +
-      'em 2h 10m; semana em 18%, reseta domingo". Detalhes (custo, tokens, ' +
-      'modelos, burn) só se ele perguntar especificamente. NUNCA invente — se ' +
-      'a tool retornar erro ou campo vazio, fale o que recebeu.',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'restart_app',
-    description:
-      'Reinicia o assistente inteiro (fecha e abre de novo) pra carregar uma ' +
-      'alteração de código que VOCÊ acabou de fazer no próprio assistente. ' +
-      'Após o restart, a sessão Live reconecta sozinha. ' +
-      'USE quando o usuário pedir "reinicia você", "reinicia o assistente", ' +
-      '"reinicia o app", "se reinicia pra carregar", "fecha e abre", "restart", ' +
-      'OU quando ele autorizar o restart depois que VOCÊ perguntou (fluxo de ' +
-      'auto-modificação descrito em claude_code_task).\n' +
-      'Fale UMA frase curta em primeira pessoa antes ("já volto", "reiniciando ' +
-      'agora") — a tool desliga tudo logo em seguida, então não dá pra falar ' +
-      'mais nada. NUNCA chame por conta própria sem o usuário pedir.\n' +
-      'PARÂMETRO test_plan: passe quando o restart for pra aplicar uma alteração ' +
-      'no PRÓPRIO assistant que você acabou de fazer. Descreva em 1-3 frases ' +
-      'O QUE VALIDAR (ex: "verificar que a tool restart_app aparece em ' +
-      'tool-declarations.ts e o handler em main/index.ts compila sem erro de ' +
-      'tipo; rodar `npx tsc --noEmit -p apps/desktop/tsconfig.json` e checar ' +
-      'que não há erros novos"). Quando vier, depois do restart eu mesmo ' +
-      'dispacho a validação automática (typecheck + verificações descritas) ' +
-      'e te aviso o resultado em primeira pessoa. Se for restart simples sem ' +
-      'alteração nova (ex: usuário só pediu "reinicia"), NÃO passe test_plan.',
-    parameters: {
-      type: 'object',
-      properties: {
-        test_plan: {
-          type: 'string',
-          description:
-            'Plano de teste em pt-BR descrevendo o que validar pós-restart. ' +
-            'Inclua comandos concretos (typecheck, npm test, etc) e o ' +
-            'comportamento esperado da feature recém-implementada. ' +
-            'Opcional — só passe quando o restart está aplicando alteração de ' +
-            'código no próprio assistant.',
-        },
-      },
     },
   },
   {
@@ -937,7 +879,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
   {
     name: 'search_worklogs',
     description:
-      'Busca SEMÂNTICA nos worklogs do Claude (~/pixxel/work-log/). Encontra ' +
+      'Busca SEMÂNTICA nos worklogs (~/pixxel/work-log/). Encontra ' +
       'sessões antigas pelo SIGNIFICADO da pergunta, não só palavras exatas. ' +
       'USE quando o usuário perguntar "como fiz aquela coisa de X", "lembra ' +
       'quando mexemos em Y", "qual foi a sessão sobre Z" — sem ele dar nome ' +
@@ -963,11 +905,11 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
   {
     name: 'list_work_logs',
     description:
-      'Lista as últimas sessões de trabalho do Claude salvas no work-log ' +
+      'Lista as últimas sessões de trabalho salvas no work-log ' +
       '(~/pixxel/work-log/). Cada sessão tem projeto, task, status (✅/❌/⏳) ' +
       'e data. USE quando o usuário pedir "quais foram minhas últimas sessões", ' +
-      '"o que o Claude fez ultimamente", "mostra o histórico de trabalho", ' +
-      '"quais worklogs eu tenho" e variações. Read-only.',
+      '"mostra o histórico de trabalho", "quais worklogs eu tenho" e variações. ' +
+      'Read-only.',
     parameters: {
       type: 'object',
       properties: {
@@ -983,7 +925,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
     description:
       'Lê uma sessão específica do work-log e devolve o conteúdo (frontmatter, ' +
       'progresso, tools usadas, resultado) pra você resumir/explicar pro usuário. ' +
-      'USE quando ele pedir "olha como fiz X", "me lembra o que o Claude fez ' +
+      'USE quando ele pedir "olha como fiz X", "me lembra o que fizemos ' +
       'naquela task de Y", "lê o último worklog", "abre aquela sessão sobre Z". ' +
       'Match é fuzzy: você pode passar nome do projeto, palavras da task, ou ' +
       'até o filename inteiro. Se não souber qual, chama list_work_logs antes. ' +
@@ -1102,56 +1044,6 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
       required: ['name'],
     },
   },
-  {
-    name: 'claude_code_task',
-    description:
-      'SUA capacidade de mexer em código no projeto ativo: editar/criar/apagar ' +
-      'arquivos, rodar comandos, instalar dependências, refatorar. USE quando ' +
-      'o usuário pedir pra: criar/editar arquivo, mexer em código, mudar ' +
-      'cor/estilo, rodar comando, instalar lib, corrigir bug, fazer refactor. ' +
-      'IMPORTANTE: fale em PRIMEIRA PESSOA — "vou fazer isso", "tô editando ' +
-      'agora", "já vou nessa", "terminei". NUNCA diga "vou pedir pro Claude", ' +
-      '"o Claude vai fazer", "Claude tá editando", nem mencione qualquer ' +
-      'agente externo. Pro usuário, é VOCÊ quem está fazendo. ' +
-      'É ASSÍNCRONO: confirma curtinho em primeira pessoa ("já tô nisso", "um ' +
-      'momento"), a tool retorna na hora, e o resultado real chega depois numa ' +
-      'mensagem do sistema pra você comentar (também em primeira pessoa). ' +
-      'Durante a execução pode chegar pedidos de permissão pra ações destrutivas ' +
-      '(edit/write/comando) — quando chegarem, você pergunta ao usuário em ' +
-      'primeira pessoa ("posso editar tal arquivo?") e repassa via ' +
-      'claude_permission_decide. ' +
-      'Se o usuário disser "no projeto X" ou citar um nome de projeto, passa ' +
-      'esse nome em `project` — vou achar e fixar como ativo. Senão, deixa em ' +
-      'branco que uso o ativo atual.\n' +
-      'AUTO-MODIFICAÇÃO (alteração no PRÓPRIO assistant, ex: "no assistant", ' +
-      '"no pixxel", "no seu próprio código"): quando a tarefa for nesse contexto ' +
-      'E EU reportar sucesso ("[Sistema] Terminei..."), NO MESMO TURNO em que ' +
-      'comentar o resultado, PERGUNTE em primeira pessoa: "quer que eu reinicie ' +
-      'pra aplicar e rodar um teste pra confirmar?". Se ele disser sim, chame ' +
-      'restart_app passando test_plan descrevendo o que validar (1-3 frases ' +
-      'concretas com comando de typecheck e/ou comportamento esperado). Se ' +
-      'ele disser não, só responda "ok, fica pra depois". NUNCA reinicie sem ' +
-      'autorização explícita. Se a tarefa falhou, NÃO ofereça restart.',
-    parameters: {
-      type: 'object',
-      properties: {
-        task: {
-          type: 'string',
-          description:
-            'Descrição da tarefa em português, completa o suficiente pra ser ' +
-            'executada sem perguntar de volta. Inclui nome de arquivo/pasta se citado.',
-        },
-        project: {
-          type: 'string',
-          description:
-            'Nome aproximado do projeto onde rodar (ex: "web girolabs", "easytext"). ' +
-            'Opcional — se não vier, usa o projeto ativo. Use sempre que o usuário ' +
-            'mencionar o projeto explicitamente na frase.',
-        },
-      },
-      required: ['task'],
-    },
-  },
 ];
 
 // Tools de captura de ideias: usadas quando o usuário pede algo que
@@ -1186,15 +1078,10 @@ export const IDEAS_TOOLS: ToolDeclaration[] = [
   {
     name: 'plan_feature',
     description:
-      'Planeja a implementação de uma feature nova e grava em IDEIAS.md, ' +
-      'depois faz uma revisão técnica do plano. USE quando o usuário disse ' +
-      'pra "planejar" ou "fazer um plano". VOCÊ elabora o plano completo no ' +
-      'parâmetro `plan` (passos técnicos, arquivos envolvidos, riscos, ' +
-      'tools/libs sugeridas) — depois VOCÊ valida tecnicamente. É ASSÍNCRONO: ' +
-      'confirma curtinho em primeira pessoa ("já vou planejar e validar"), ' +
-      'a tool retorna na hora, e a revisão técnica chega depois pra você ' +
-      'comentar. Fale sempre em PRIMEIRA PESSOA, NUNCA mencione "Claude" nem ' +
-      'agente externo.',
+      'Planeja a implementação de uma feature nova e grava em IDEIAS.md. ' +
+      'USE quando o usuário disse pra "planejar" ou "fazer um plano". ' +
+      'VOCÊ elabora o plano completo no parâmetro `plan` (passos técnicos, ' +
+      'arquivos envolvidos, riscos, tools/libs sugeridas).',
     parameters: {
       type: 'object',
       properties: {
@@ -1218,49 +1105,6 @@ export const IDEAS_TOOLS: ToolDeclaration[] = [
     },
   },
 ];
-
-// Tools de controle do Claude por voz: usadas quando Gemini precisa
-// repassar uma decisão do usuário pro Claude (ex: aprovar/negar permissão
-// que o Claude pediu enquanto rodava).
-export const CLAUDE_CONTROL_TOOLS: ToolDeclaration[] = [
-  {
-    name: 'claude_cancel_task',
-    description:
-      'Para a tarefa de código que VOCÊ está executando agora E descarta a ' +
-      'fila de tarefas pendentes. USE quando o usuário pedir pra "cancelar", ' +
-      '"parar", "interromper", "deixa pra lá" referindo-se ao trabalho em ' +
-      'andamento. CHAMA SEMPRE no MESMO turno em que confirmar — não fale ' +
-      '"cancelei" sem disparar a tool, senão o trabalho continua rodando. ' +
-      'Fale em PRIMEIRA PESSOA ("parei", "cancelei o que estava fazendo"), ' +
-      'NUNCA mencione "Claude" nem outro agente.',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'claude_permission_decide',
-    description:
-      'Confirma ou nega a permissão pendente que VOCÊ pediu ao usuário pra ' +
-      'continuar uma ação destrutiva (editar/escrever/rodar comando). USE ' +
-      'quando você tinha pedido autorização ("posso editar tal arquivo?") e ' +
-      'o usuário respondeu sim/não. Fale em PRIMEIRA PESSOA antes/depois ' +
-      '("vou em frente então", "ok, deixa pra lá"), NUNCA mencione "Claude" ' +
-      'nem que está repassando pra outro agente — pro usuário, é só você ' +
-      'continuando o trabalho.',
-    parameters: {
-      type: 'object',
-      properties: {
-        allowed: {
-          type: 'boolean',
-          description: 'true = aprovar, false = negar',
-        },
-      },
-      required: ['allowed'],
-    },
-  },
-];
-
-export const CLAUDE_CONTROL_TOOL_NAMES: Set<string> = new Set(
-  CLAUDE_CONTROL_TOOLS.map((t) => t.name),
-);
 
 // Tools de UI: controlam o estado visual do app (abrir/fechar painéis).
 // Não são ClientCommand nem integração — main dispatcher trata direto.
@@ -1335,5 +1179,4 @@ export const ALL_TOOLS: ToolDeclaration[] = [
   ...INTEGRATION_TOOLS,
   ...UI_TOOLS,
   ...IDEAS_TOOLS,
-  ...CLAUDE_CONTROL_TOOLS,
 ];

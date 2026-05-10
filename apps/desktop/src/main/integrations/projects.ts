@@ -132,8 +132,8 @@ export type FindProjectResult =
     };
 
 /**
- * Match fuzzy igual ao openProject mas SEM abrir VSCode. Usado quando o
- * Claude precisa só do path pra rodar — sem efeitos visuais externos.
+ * Match fuzzy igual ao openProject mas SEM abrir VSCode. Usado quando só
+ * precisamos resolver o path do projeto, sem efeitos visuais externos.
  */
 export function findProject(query: string): FindProjectResult {
   const all = listProjects();

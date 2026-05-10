@@ -1,6 +1,4 @@
 import { memo, useEffect, useState } from 'react';
-import type { ClaudeUsage } from '../../shared/ipc.js';
-import { ClaudeUsagePill } from './ClaudeUsagePill.js';
 import { Sparkline } from './Sparkline.js';
 
 export type SystemMetricsSnapshot = {
@@ -17,7 +15,6 @@ export type ProcessInfo = {
 };
 
 type Props = {
-  claudeUsage: ClaudeUsage | null;
   metrics: SystemMetricsSnapshot | null;
   cpuHistory: number[];
   topProcesses: { topCpu: ProcessInfo[]; topMem: ProcessInfo[] };
@@ -94,7 +91,6 @@ const ClockBlock = memo(function ClockBlock() {
 });
 
 function SidebarInner({
-  claudeUsage,
   metrics,
   cpuHistory,
   topProcesses,
@@ -106,13 +102,6 @@ function SidebarInner({
   return (
     <aside className="sidebar">
       <ClockBlock />
-
-      <div className="sidebar__section">
-        <div className="sidebar__section-title">CLAUDE USAGE</div>
-        <div className="sidebar__claude">
-          <ClaudeUsagePill usage={claudeUsage} />
-        </div>
-      </div>
 
       <div className="sidebar__section">
         <div className="sidebar__section-title">CPU</div>

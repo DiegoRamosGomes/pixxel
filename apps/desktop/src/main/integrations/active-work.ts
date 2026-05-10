@@ -33,9 +33,8 @@ export type WorkStatus =
 
 /**
  * Tipo de sessão. `manual` = usuário disse "vou trabalhar em X" (start_work).
- * `code` = disparada por claude_code_task (auto-criada quando uma task começa).
  */
-export type WorkKind = 'manual' | 'code';
+export type WorkKind = 'manual';
 
 export type WorkEntry = {
   /** ISO timestamp do início. */
@@ -54,14 +53,12 @@ export type WorkEntry = {
   owner?: string;
   /** Nota livre (motivo de parar, contexto pra continuar). */
   note?: string;
-  /** Project path (cwd do claude). Pra retomar precisa do mesmo cwd. */
+  /** Project path. Pra retomar precisa do mesmo cwd. */
   cwd?: string;
   /** Nome amigável do projeto, pra exibição. */
   projectName?: string;
-  /** Session id do claude pra retomar via --resume. */
-  claudeSessionId?: string;
-  /** Última ação observada (tool_use ou trecho de texto) — pro usuário lembrar
-   *  do que tava fazendo ao retomar. Atualizado durante a execução. */
+  /** Última ação observada — pro usuário lembrar do que tava fazendo ao
+   *  retomar. */
   lastStep?: string;
 };
 
@@ -171,7 +168,6 @@ class ActiveWorkStore {
     kind?: WorkKind;
     cwd?: string;
     projectName?: string;
-    claudeSessionId?: string;
     /** Quando true, fecha sessão aberta antes (compat com fluxo antigo).
      *  Quando false (default), retorna conflict se houver running. */
     forceCloseExisting?: boolean;
@@ -201,7 +197,6 @@ class ActiveWorkStore {
       owner: input.owner?.trim() || undefined,
       cwd: input.cwd,
       projectName: input.projectName ?? undefined,
-      claudeSessionId: input.claudeSessionId,
     };
     this.entries.push(entry);
     await this.persist();
@@ -245,9 +240,7 @@ class ActiveWorkStore {
     return { ok: true, entry: open };
   }
 
-  /** Falha técnica — fecha com status failed. Aceita running OU paused, igual
-   *  endWork/interruptCurrent: se Claude falha enquanto a sessão tava pausada,
-   *  ainda precisa fechar pra não virar zumbi. */
+  /** Falha técnica — fecha com status failed. Aceita running OU paused. */
   async markFailed(reason?: string): Promise<{ ok: boolean; entry?: WorkEntry }> {
     const open = this.openEntry();
     if (!open) return { ok: false };
@@ -260,19 +253,11 @@ class ActiveWorkStore {
     return { ok: true, entry: open };
   }
 
-  /** Atualiza lastStep da running atual — chamado durante claude_code_task. */
+  /** Atualiza lastStep da running atual. */
   async updateLastStep(step: string): Promise<void> {
     const open = this.current();
     if (!open) return;
     open.lastStep = step.slice(0, 280);
-    await this.persist();
-  }
-
-  /** Atualiza claudeSessionId da running atual quando o init chega. */
-  async setClaudeSessionId(sessionId: string): Promise<void> {
-    const open = this.current();
-    if (!open) return;
-    open.claudeSessionId = sessionId;
     await this.persist();
   }
 

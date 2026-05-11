@@ -11,7 +11,19 @@ export type ClaudeSessionStatus =
   | 'paused'
   | 'crashed'
   | 'failed'
-  | 'awaiting_approval';
+  | 'awaiting_approval'
+  | 'awaiting_user_input';
+
+export interface ClaudeQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface ClaudeQuestion {
+  questionId: string;
+  question: string;
+  options: ClaudeQuestionOption[];
+}
 
 export interface ClaudeSessionView {
   sessionId: string;
@@ -114,6 +126,23 @@ export type RendererEvent =
   | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
   | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string; project: string | null; cancelled: boolean }
   | { type: 'claude_session_plan_ready'; sessionId: string; project: string | null; plan: string }
+  | {
+      type: 'claude_session_question_ready';
+      sessionId: string;
+      project: string | null;
+      question: ClaudeQuestion;
+    }
+  | {
+      type: 'claude_session_permission_ready';
+      sessionId: string;
+      project: string | null;
+      permission: {
+        permissionId: string;
+        toolName: string;
+        toolInput: Record<string, unknown>;
+        toolUseId: string;
+      };
+    }
   | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] }
   | { type: 'claude_quota_update'; quota: ClaudeQuotaSnapshot };
 

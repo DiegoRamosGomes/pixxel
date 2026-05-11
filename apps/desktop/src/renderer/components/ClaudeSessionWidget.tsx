@@ -1,10 +1,16 @@
 import { useEffect, useRef } from 'react';
-import type { ClaudeSessionChunk, ClaudeSessionStatus, ClaudeSessionView } from '../../shared/ipc.js';
+import type {
+  ClaudeQuestion,
+  ClaudeSessionChunk,
+  ClaudeSessionStatus,
+  ClaudeSessionView,
+} from '../../shared/ipc.js';
 
 export interface SessionView extends ClaudeSessionView {
   chunks: ClaudeSessionChunk[];
   finalText?: string;
   pendingPlan?: string;
+  pendingQuestion?: ClaudeQuestion;
 }
 
 export interface ClaudeSessionWidgetProps {
@@ -18,7 +24,8 @@ const STATUS_LABEL: Record<ClaudeSessionStatus, string> = {
   paused: 'pausado',
   crashed: 'caiu',
   failed: 'falhou',
-  awaiting_approval: 'aguardando',
+  awaiting_approval: 'aguardando plano',
+  awaiting_user_input: 'aguardando resposta',
 };
 
 const STATUS_COLOR: Record<ClaudeSessionStatus, string> = {
@@ -28,6 +35,7 @@ const STATUS_COLOR: Record<ClaudeSessionStatus, string> = {
   crashed: '#ef4444',
   failed: '#ef4444',
   awaiting_approval: '#a855f7',
+  awaiting_user_input: '#06b6d4',
 };
 
 export function ClaudeSessionWidget({ session, onDismiss }: ClaudeSessionWidgetProps) {
@@ -77,6 +85,20 @@ export function ClaudeSessionWidget({ session, onDismiss }: ClaudeSessionWidgetP
           <div className="claude-session__plan">
             <div className="claude-session__plan-label">plano (aguardando aprovação)</div>
             {session.pendingPlan}
+          </div>
+        )}
+        {session.status === 'awaiting_user_input' && session.pendingQuestion && (
+          <div className="claude-session__question">
+            <div className="claude-session__question-label">pergunta (aguardando resposta)</div>
+            <div className="claude-session__question-text">{session.pendingQuestion.question}</div>
+            <ul className="claude-session__question-options">
+              {session.pendingQuestion.options.map((opt, i) => (
+                <li key={i}>
+                  <strong>{opt.label}</strong>
+                  {opt.description ? <span> — {opt.description}</span> : null}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {session.finalText && session.status === 'done' && (

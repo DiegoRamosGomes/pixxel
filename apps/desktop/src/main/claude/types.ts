@@ -4,7 +4,28 @@ export type SessionStatus =
   | 'paused'
   | 'crashed'
   | 'failed'
-  | 'awaiting_approval';
+  | 'awaiting_approval'
+  | 'awaiting_user_input';
+
+export interface PendingQuestion {
+  questionId: string;
+  question: string;
+  options: Array<{ label: string; description?: string }>;
+}
+
+/**
+ * Pedido de permissão roteado pelo Claude CLI via `--permission-prompt-tool`.
+ * Aguarda decisão do usuário (allow/deny) antes do Claude executar a tool.
+ */
+export interface PendingPermission {
+  permissionId: string;
+  /** Tool que o Claude quer executar (ex: 'Bash', 'Edit', 'Write'). */
+  toolName: string;
+  /** Args completos da tool — descrevem o que vai acontecer. */
+  toolInput: Record<string, unknown>;
+  /** ID interno da invocação da tool, devolvido pro CLI na resposta. */
+  toolUseId: string;
+}
 
 export interface ClaudeSession {
   sessionId: string;
@@ -20,6 +41,10 @@ export interface ClaudeSession {
   complexity?: number;
   /** Plano gerado em modo plan, esperando aprovação. */
   pendingPlan?: string;
+  /** Pergunta atual aguardando resposta (status === 'awaiting_user_input'). */
+  pendingQuestion?: PendingQuestion;
+  /** Pedido de permissão (Bash/Edit/Write) aguardando decisão. */
+  pendingPermission?: PendingPermission;
 }
 
 export interface ClaudeOutputChunk {

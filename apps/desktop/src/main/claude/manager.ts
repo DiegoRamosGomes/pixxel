@@ -1,9 +1,20 @@
 import { EventEmitter } from 'node:events';
-import type { ClaudeSessionChunk, ClaudeSessionView, ClaudeSessionStatus } from '../../shared/ipc.js';
+import type {
+  ClaudeQuestion,
+  ClaudeSessionChunk,
+  ClaudeSessionView,
+  ClaudeSessionStatus,
+} from '../../shared/ipc.js';
 import { ClaudeRunner, isPixxelProject, newSessionId, type PermissionMode } from './runner.js';
 import { getSessionStore, SessionStore } from './sessions.js';
 import { getQuotaService, type QuotaService } from './quota.js';
-import type { ClaudeSession } from './types.js';
+import {
+  getMcpServer,
+  type AskUserQuestion,
+  type PixxelMcpServer,
+  type PermissionRequest,
+} from './mcp-server.js';
+import type { ClaudeSession, PendingPermission } from './types.js';
 
 export interface StartTaskInput {
   task: string;
@@ -40,6 +51,32 @@ export type PlanActionResult =
   | { ok: true; session: ClaudeSessionView }
   | { ok: false; reason: 'no_awaiting' | 'ambiguous' | 'not_found' | 'spawn_failed'; awaiting?: ClaudeSessionView[]; detail?: string };
 
+export interface QuestionTarget {
+  sessionId?: string;
+  project?: string;
+}
+
+export type QuestionActionResult =
+  | { ok: true; session: ClaudeSessionView }
+  | {
+      ok: false;
+      reason: 'no_question' | 'ambiguous' | 'not_found';
+      questions?: Array<{ session: ClaudeSessionView; question: ClaudeQuestion }>;
+    };
+
+export interface PermissionTarget {
+  sessionId?: string;
+  project?: string;
+}
+
+export type PermissionActionResult =
+  | { ok: true; session: ClaudeSessionView }
+  | {
+      ok: false;
+      reason: 'no_permission' | 'ambiguous' | 'not_found';
+      permissions?: Array<{ session: ClaudeSessionView; permission: PendingPermission }>;
+    };
+
 interface ManagerEvents {
   session_started: (view: ClaudeSessionView) => void;
   session_chunk: (sessionId: string, chunk: ClaudeSessionChunk) => void;
@@ -52,6 +89,12 @@ interface ManagerEvents {
     cancelled: boolean,
   ) => void;
   plan_ready: (sessionId: string, project: string | null, plan: string) => void;
+  question_ready: (sessionId: string, project: string | null, question: ClaudeQuestion) => void;
+  permission_ready: (
+    sessionId: string,
+    project: string | null,
+    permission: PendingPermission,
+  ) => void;
 }
 
 interface QueuedTask {
@@ -88,6 +131,7 @@ const PLAN_THRESHOLD = 7;
 export class ClaudeManager extends EventEmitter {
   private store: SessionStore;
   private quota: QuotaService;
+  private mcp: PixxelMcpServer;
   private runs = new Map<string, ActiveRun>();
   private queue: QueuedTask[] = [];
 
@@ -95,6 +139,7 @@ export class ClaudeManager extends EventEmitter {
     super();
     this.store = getSessionStore();
     this.quota = getQuotaService();
+    this.mcp = getMcpServer();
   }
 
   on<E extends keyof ManagerEvents>(event: E, listener: ManagerEvents[E]): this {
@@ -112,6 +157,104 @@ export class ClaudeManager extends EventEmitter {
       console.log(`[claude/manager] ${crashed.length} sessão(ões) marcadas como crashed no boot`);
       for (const s of crashed) this.emit('session_status', s.sessionId, 'crashed');
     }
+
+    // Sobe MCP server local — substitui o `AskUserQuestion` built-in.
+    await this.mcp.start();
+    this.mcp.on('question_asked', (q) => this.onQuestionAsked(q));
+    this.mcp.on('permission_requested', (p) => this.onPermissionRequested(p));
+  }
+
+  /** Roteia uma pergunta vinda do MCP server pra sessão correta. */
+  private async onQuestionAsked(q: AskUserQuestion): Promise<void> {
+    // Identifica sessão: 1º tenta _pixxel_session vindo da tool. 2º fallback:
+    // se só 1 sessão running, atribui a ela. Senão, atribui à mais recente.
+    let sessionId = q.sessionId;
+    if (!sessionId || !this.store.get(sessionId)) {
+      const running = this.store.active().filter((s) => s.status === 'running');
+      if (running.length === 1) {
+        sessionId = running[0].sessionId;
+      } else if (running.length > 1) {
+        const mostRecent = [...running].sort((a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        )[0];
+        sessionId = mostRecent.sessionId;
+        console.warn(
+          `[claude/manager] question sem sessionId válido; heurística atribuiu à mais recente: ${sessionId.slice(0, 8)}`,
+        );
+      } else {
+        // Não tem nenhuma running pra atribuir — rejeita a pergunta.
+        console.warn('[claude/manager] question sem sessão running pra atribuir; rejeitando');
+        this.mcp.rejectQuestion(q.questionId, 'no_active_session');
+        return;
+      }
+    }
+
+    const session = this.store.get(sessionId);
+    if (!session) {
+      this.mcp.rejectQuestion(q.questionId, 'session_not_found');
+      return;
+    }
+    session.status = 'awaiting_user_input';
+    session.pendingQuestion = {
+      questionId: q.questionId,
+      question: q.question,
+      options: q.options,
+    };
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', sessionId, 'awaiting_user_input');
+    this.emit('question_ready', sessionId, session.project, {
+      questionId: q.questionId,
+      question: q.question,
+      options: q.options,
+    });
+  }
+
+  /** Roteia um pedido de permissão (Bash/Edit/Write/etc) pra sessão correta. */
+  private async onPermissionRequested(p: PermissionRequest): Promise<void> {
+    let sessionId = p.sessionId;
+    if (!sessionId || !this.store.get(sessionId)) {
+      const running = this.store.active().filter((s) => s.status === 'running');
+      if (running.length === 1) {
+        sessionId = running[0].sessionId;
+      } else if (running.length > 1) {
+        const mostRecent = [...running].sort(
+          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        )[0];
+        sessionId = mostRecent.sessionId;
+        console.warn(
+          `[claude/manager] permission sem sessionId; heurística atribuiu à mais recente: ${sessionId.slice(0, 8)}`,
+        );
+      } else {
+        console.warn('[claude/manager] permission sem sessão running pra atribuir; negando');
+        this.mcp.resolvePermission(p.permissionId, {
+          behavior: 'deny',
+          message: 'no_active_session',
+        });
+        return;
+      }
+    }
+
+    const session = this.store.get(sessionId);
+    if (!session) {
+      this.mcp.resolvePermission(p.permissionId, {
+        behavior: 'deny',
+        message: 'session_not_found',
+      });
+      return;
+    }
+    const pending: PendingPermission = {
+      permissionId: p.permissionId,
+      toolName: p.toolName,
+      toolInput: p.toolInput,
+      toolUseId: p.toolUseId,
+    };
+    session.status = 'awaiting_user_input';
+    session.pendingPermission = pending;
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', sessionId, 'awaiting_user_input');
+    this.emit('permission_ready', sessionId, session.project, pending);
   }
 
   snapshot(): ClaudeSessionView[] {
@@ -463,11 +606,211 @@ export class ClaudeManager extends EventEmitter {
     return { ok: true, dismissed };
   }
 
+  /** Sessões aguardando resposta do usuário (status awaiting_user_input). */
+  questioning(): ClaudeSessionView[] {
+    return this.store
+      .active()
+      .filter((s) => s.status === 'awaiting_user_input')
+      .map(toView);
+  }
+
+  /** Resposta do usuário à pergunta. Resolve a Promise do MCP server. */
+  async answerQuestion(answer: string, target: QuestionTarget = {}): Promise<QuestionActionResult> {
+    const picked = this.pickQuestioning(target);
+    if ('ok' in picked) return picked;
+    const { session } = picked;
+    if (!session.pendingQuestion) {
+      return { ok: false, reason: 'not_found' };
+    }
+    const ok = this.mcp.resolveQuestion(session.pendingQuestion.questionId, answer);
+    if (!ok) {
+      console.warn('[claude/manager] resolveQuestion falhou — pergunta sumiu do MCP');
+    }
+    // Volta status pra running (Claude vai continuar processando)
+    session.status = 'running';
+    session.pendingQuestion = undefined;
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', session.sessionId, 'running');
+    return { ok: true, session: toView(session) };
+  }
+
+  /** Rejeita a pergunta (sem resposta). Claude recebe erro e tipicamente aborta. */
+  async rejectQuestion(target: QuestionTarget = {}): Promise<QuestionActionResult> {
+    const picked = this.pickQuestioning(target);
+    if ('ok' in picked) return picked;
+    const { session } = picked;
+    if (!session.pendingQuestion) {
+      return { ok: false, reason: 'not_found' };
+    }
+    this.mcp.rejectQuestion(session.pendingQuestion.questionId, 'user_rejected');
+    session.status = 'running';
+    session.pendingQuestion = undefined;
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', session.sessionId, 'running');
+    return { ok: true, session: toView(session) };
+  }
+
+  /** Aprova um pedido de permissão pendente — Claude executa a tool. */
+  async approvePermission(target: PermissionTarget = {}): Promise<PermissionActionResult> {
+    const picked = this.pickPermissioning(target);
+    if ('ok' in picked) return picked;
+    const { session } = picked;
+    if (!session.pendingPermission) return { ok: false, reason: 'not_found' };
+    // Devolve `updatedInput` com o input original — o exemplo de referência
+    // do feature `--permission-prompt-tool` sempre inclui esse campo em allow.
+    // Sem ele, observamos loop onde o CLI re-pede permissão da mesma tool.
+    this.mcp.resolvePermission(session.pendingPermission.permissionId, {
+      behavior: 'allow',
+      updatedInput: session.pendingPermission.toolInput,
+    });
+    session.status = 'running';
+    session.pendingPermission = undefined;
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', session.sessionId, 'running');
+    return { ok: true, session: toView(session) };
+  }
+
+  /** Nega um pedido de permissão — Claude recebe deny e tipicamente desiste da tool. */
+  async denyPermission(
+    target: PermissionTarget = {},
+    reason = 'user_denied',
+  ): Promise<PermissionActionResult> {
+    const picked = this.pickPermissioning(target);
+    if ('ok' in picked) return picked;
+    const { session } = picked;
+    if (!session.pendingPermission) return { ok: false, reason: 'not_found' };
+    this.mcp.resolvePermission(session.pendingPermission.permissionId, {
+      behavior: 'deny',
+      message: reason,
+    });
+    session.status = 'running';
+    session.pendingPermission = undefined;
+    session.updatedAt = new Date().toISOString();
+    await this.store.upsert(session);
+    this.emit('session_status', session.sessionId, 'running');
+    return { ok: true, session: toView(session) };
+  }
+
+  private pickPermissioning(
+    target: PermissionTarget,
+  ): { session: ClaudeSession } | PermissionActionResult {
+    const list = this.store
+      .active()
+      .filter((s) => s.status === 'awaiting_user_input' && s.pendingPermission);
+    if (list.length === 0) return { ok: false, reason: 'no_permission' };
+
+    if (target.sessionId) {
+      const found = list.find((s) => s.sessionId === target.sessionId);
+      if (!found) {
+        return {
+          ok: false,
+          reason: 'not_found',
+          permissions: list.map((s) => ({
+            session: toView(s),
+            permission: s.pendingPermission!,
+          })),
+        };
+      }
+      return { session: found };
+    }
+    if (target.project) {
+      const matches = matchByProject(list.map(toView), target.project);
+      if (matches.length === 0) {
+        return {
+          ok: false,
+          reason: 'not_found',
+          permissions: list.map((s) => ({
+            session: toView(s),
+            permission: s.pendingPermission!,
+          })),
+        };
+      }
+      if (matches.length > 1) {
+        const ms = list.filter((s) => matches.some((m) => m.sessionId === s.sessionId));
+        return {
+          ok: false,
+          reason: 'ambiguous',
+          permissions: ms.map((s) => ({
+            session: toView(s),
+            permission: s.pendingPermission!,
+          })),
+        };
+      }
+      const found = list.find((s) => s.sessionId === matches[0].sessionId);
+      if (!found) return { ok: false, reason: 'not_found' };
+      return { session: found };
+    }
+    if (list.length > 1) {
+      return {
+        ok: false,
+        reason: 'ambiguous',
+        permissions: list.map((s) => ({
+          session: toView(s),
+          permission: s.pendingPermission!,
+        })),
+      };
+    }
+    return { session: list[0] };
+  }
+
+  private pickQuestioning(target: QuestionTarget):
+    | { session: ClaudeSession }
+    | QuestionActionResult {
+    const list = this.store.active().filter((s) => s.status === 'awaiting_user_input' && s.pendingQuestion);
+    if (list.length === 0) return { ok: false, reason: 'no_question' };
+
+    if (target.sessionId) {
+      const found = list.find((s) => s.sessionId === target.sessionId);
+      if (!found) {
+        return {
+          ok: false,
+          reason: 'not_found',
+          questions: list.map((s) => ({ session: toView(s), question: questionOf(s) })),
+        };
+      }
+      return { session: found };
+    }
+    if (target.project) {
+      const matches = matchByProject(list.map(toView), target.project);
+      if (matches.length === 0) {
+        return {
+          ok: false,
+          reason: 'not_found',
+          questions: list.map((s) => ({ session: toView(s), question: questionOf(s) })),
+        };
+      }
+      if (matches.length > 1) {
+        const ms = list.filter((s) => matches.some((m) => m.sessionId === s.sessionId));
+        return {
+          ok: false,
+          reason: 'ambiguous',
+          questions: ms.map((s) => ({ session: toView(s), question: questionOf(s) })),
+        };
+      }
+      const found = list.find((s) => s.sessionId === matches[0].sessionId);
+      if (!found) return { ok: false, reason: 'not_found' };
+      return { session: found };
+    }
+    if (list.length > 1) {
+      return {
+        ok: false,
+        reason: 'ambiguous',
+        questions: list.map((s) => ({ session: toView(s), question: questionOf(s) })),
+      };
+    }
+    return { session: list[0] };
+  }
+
   async shutdown(): Promise<void> {
-    if (this.runs.size === 0) return;
-    console.log(`[claude/manager] shutdown: cancelando ${this.runs.size} sessão(ões)`);
-    this.queue.length = 0;
-    await Promise.all(Array.from(this.runs.values()).map((r) => r.runner.cancel()));
+    if (this.runs.size > 0) {
+      console.log(`[claude/manager] shutdown: cancelando ${this.runs.size} sessão(ões)`);
+      this.queue.length = 0;
+      await Promise.all(Array.from(this.runs.values()).map((r) => r.runner.cancel()));
+    }
+    await this.mcp.stop();
   }
 
   // -------- internal --------
@@ -623,13 +966,31 @@ export class ClaudeManager extends EventEmitter {
     });
 
     try {
+      // Injeta no system prompt instrução sobre a tool MCP de pergunta.
+      // SessionId vai como param obrigatório pro Pixxel rotear a resposta.
+      const askUserGuide =
+        `\n\n## Tool de pergunta ao usuário (Pixxel)\n` +
+        `Sua session_id é: ${sessionId}.\n` +
+        `Quando precisar de uma decisão do usuário durante a tarefa ` +
+        `(escolha de biblioteca, abordagem ambígua, confirmação destrutiva), use a tool ` +
+        `\`mcp__pixxel__ask_user(question, options, _pixxel_session)\`. ` +
+        `SEMPRE passe \`_pixxel_session: "${sessionId}"\` pra rotear a resposta corretamente. ` +
+        `NÃO use AskUserQuestion (desabilitada).\n` +
+        `NÃO pergunte coisas hipotéticas — só quando realmente precisar antes de prosseguir.`;
+      const append = (args.appendSystemPrompt ?? '') + askUserGuide;
+
       runner.start({
         task: args.task,
         cwd: args.cwd,
         sessionId,
-        appendSystemPrompt: args.appendSystemPrompt,
+        appendSystemPrompt: append,
         permissionMode,
         resume,
+        mcpConfigJson: this.mcp.mcpConfigJson(),
+        disallowedTools: ['AskUserQuestion'],
+        // Roteia pedidos de permissão (Bash, Edit, Write, etc) pra tool MCP
+        // local — sessão Claude espera decisão do usuário em vez de encerrar.
+        permissionPromptTool: 'mcp__pixxel__permission_prompt',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -682,6 +1043,14 @@ function summarizeToolInput(tool: string, input: unknown): string {
   if (typeof i.path === 'string') return `${tool} ${i.path}`;
   if (typeof i.pattern === 'string') return `${tool} "${i.pattern}"`;
   return tool;
+}
+
+function questionOf(s: ClaudeSession): ClaudeQuestion {
+  return {
+    questionId: s.pendingQuestion?.questionId ?? '',
+    question: s.pendingQuestion?.question ?? '',
+    options: s.pendingQuestion?.options ?? [],
+  };
 }
 
 function matchByProject(running: ClaudeSessionView[], query: string): ClaudeSessionView[] {

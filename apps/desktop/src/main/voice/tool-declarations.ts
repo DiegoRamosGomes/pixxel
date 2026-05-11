@@ -535,6 +535,308 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
       required: ['taskId'],
     },
   },
+  // Trello — TODAS as tools operam EXCLUSIVAMENTE no board "Pessoal".
+  // Não existe parâmetro `board`: o board é fixo por decisão do usuário.
+  {
+    name: 'trello_list_lists',
+    description:
+      'Lista as colunas/listas do board do Trello (ex: "A Fazer", "Em Progresso", "Concluído"). ' +
+      'USE pra descobrir o nome certo antes de criar/mover card.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'trello_list_labels',
+    description:
+      'Lista as etiquetas (labels) nomeadas do board do Trello. USE pra mostrar opções ' +
+      'antes de adicionar/remover etiqueta.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'trello_list_cards',
+    description:
+      'Lista cards do Trello — de uma lista específica (passando `list`) ou do board inteiro. ' +
+      'USE em "quais cards tem na lista X", "o que tem pra fazer no Trello". Read-only — abre ' +
+      'widget visual também.',
+    parameters: {
+      type: 'object',
+      properties: {
+        list: {
+          type: 'string',
+          description:
+            'Nome (fuzzy) ou ID da lista/coluna. Omita pra listar tudo do board.',
+        },
+      },
+    },
+  },
+  {
+    name: 'trello_get_card',
+    description:
+      'Pega detalhes completos de um card do Trello: descrição, vencimento, etiquetas, ' +
+      'checklists, comentários. USE em "me mostra o card X", "como tá a task Y do Trello", ' +
+      '"detalha esse card". Aceita ID, shortLink, ou parte do nome.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+      },
+      required: ['card'],
+    },
+  },
+  {
+    name: 'trello_create_card',
+    description:
+      'Cria um card novo no Trello. USE quando o usuário disser "cria um card no Trello pra X", ' +
+      '"adiciona uma task na lista Y dizendo Z", "novo card chamado X com vencimento amanhã". ' +
+      'OBRIGATÓRIO `name` e `list`. Datas em ISO 8601 (ex: "2026-05-15T17:00:00.000Z") — se o ' +
+      'usuário disser "amanhã às 5 da tarde", converta antes de chamar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Título do card.',
+        },
+        list: {
+          type: 'string',
+          description:
+            'Nome (fuzzy) ou ID da lista/coluna onde criar (ex: "A Fazer", "Backlog").',
+        },
+        desc: {
+          type: 'string',
+          description: 'Descrição em markdown (opcional).',
+        },
+        due: {
+          type: 'string',
+          description:
+            'Data de vencimento em ISO 8601 (opcional). Você converte horários em linguagem ' +
+            'natural pra absoluto antes de chamar (use fuso America/Asuncion).',
+        },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Nomes de etiquetas (fuzzy match) a aplicar no card recém-criado.',
+        },
+      },
+      required: ['name', 'list'],
+    },
+  },
+  {
+    name: 'trello_update_card',
+    description:
+      'Atualiza campos básicos de um card do Trello: título, descrição, vencimento, status do ' +
+      'vencimento (concluído). USE em "muda o título do card X pra Y", "ajusta a descrição ' +
+      'desse card", "marca o vencimento desse card como concluído", "remove a data desse card" ' +
+      '(passe due=null pra limpar). Pra mover de lista use trello_move_card; pra arquivar use ' +
+      'trello_archive_card.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        name: { type: 'string', description: 'Novo título (opcional).' },
+        desc: { type: 'string', description: 'Nova descrição (opcional).' },
+        due: {
+          type: 'string',
+          description:
+            'Nova data ISO 8601, ou string vazia/null pra LIMPAR o vencimento (opcional).',
+        },
+        due_complete: {
+          type: 'boolean',
+          description: 'Marca o vencimento como concluído ou não (opcional).',
+        },
+      },
+      required: ['card'],
+    },
+  },
+  {
+    name: 'trello_move_card',
+    description:
+      'Move um card do Trello para outra lista do MESMO board. USE em "move o card X pra ' +
+      '`Em Progresso`", "passa essa task pra coluna Concluído", "manda esse card pra Backlog".',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        list: {
+          type: 'string',
+          description: 'Nome (fuzzy) ou ID da lista destino.',
+        },
+      },
+      required: ['card', 'list'],
+    },
+  },
+  {
+    name: 'trello_archive_card',
+    description:
+      'Arquiva (closed=true) um card do Trello. AÇÃO DESTRUTIVA — confirme com o usuário antes ' +
+      'de chamar se não foi explícito. USE em "arquiva o card X", "fecha essa task", "esconde ' +
+      'esse card", "termino, arquiva". Card arquivado pode ser desarquivado depois por ID via ' +
+      'trello_unarchive_card.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+      },
+      required: ['card'],
+    },
+  },
+  {
+    name: 'trello_unarchive_card',
+    description:
+      'Desarquiva um card do Trello (closed=false). USE em "desarquiva o card X", "traz de ' +
+      'volta aquele card". REQUER o ID/shortLink do card — busca por nome não funciona pra ' +
+      'cards arquivados.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID ou shortLink do card arquivado.',
+        },
+      },
+      required: ['card'],
+    },
+  },
+  {
+    name: 'trello_add_comment',
+    description:
+      'Adiciona um comentário em um card do Trello. USE em "comenta no card X dizendo Y", ' +
+      '"deixa um comentário em Z dizendo `texto`", "anota no card que aconteceu W".',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        text: {
+          type: 'string',
+          description: 'Texto do comentário (markdown suportado).',
+        },
+      },
+      required: ['card', 'text'],
+    },
+  },
+  {
+    name: 'trello_add_label',
+    description:
+      'Adiciona uma etiqueta nomeada a um card do Trello. USE em "marca o card X com a ' +
+      'etiqueta Y", "põe a label `urgente` no card Z". Se não souber as etiquetas disponíveis, ' +
+      'chame trello_list_labels primeiro.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        label: {
+          type: 'string',
+          description: 'Nome (fuzzy) ou ID da etiqueta.',
+        },
+      },
+      required: ['card', 'label'],
+    },
+  },
+  {
+    name: 'trello_remove_label',
+    description:
+      'Remove uma etiqueta de um card do Trello. USE em "tira a etiqueta X do card Y", ' +
+      '"remove a label `urgente` daquele card".',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        label: {
+          type: 'string',
+          description: 'Nome (fuzzy) ou ID da etiqueta.',
+        },
+      },
+      required: ['card', 'label'],
+    },
+  },
+  {
+    name: 'trello_add_checklist',
+    description:
+      'Cria uma checklist em um card do Trello, opcionalmente com itens já preenchidos. USE ' +
+      'em "adiciona uma checklist no card X chamada Y com os itens A, B, C", "cria uma lista ' +
+      'de subtarefas nesse card".',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        name: {
+          type: 'string',
+          description: 'Título da checklist.',
+        },
+        items: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Itens iniciais da checklist (opcional).',
+        },
+      },
+      required: ['card', 'name'],
+    },
+  },
+  {
+    name: 'trello_check_item',
+    description:
+      'Marca um item de checklist de um card do Trello como CONCLUÍDO. USE em "marca o item ' +
+      '`X` como feito", "concluí o subitem Y do card Z". Busca o item por substring do nome ' +
+      'em todas as checklists do card.',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        item: {
+          type: 'string',
+          description: 'Nome (substring) do item dentro de qualquer checklist do card.',
+        },
+      },
+      required: ['card', 'item'],
+    },
+  },
+  {
+    name: 'trello_uncheck_item',
+    description:
+      'Desmarca um item de checklist (volta pra incomplete). USE em "desmarca o item X", ' +
+      '"reabre aquele subitem do card Y".',
+    parameters: {
+      type: 'object',
+      properties: {
+        card: {
+          type: 'string',
+          description: 'ID, shortLink ou parte do nome do card.',
+        },
+        item: {
+          type: 'string',
+          description: 'Nome (substring) do item dentro de qualquer checklist do card.',
+        },
+      },
+      required: ['card', 'item'],
+    },
+  },
   {
     name: 'restart_wifi',
     description:
@@ -1238,6 +1540,80 @@ export const CLAUDE_TOOLS: ToolDeclaration[] = [
         target: {
           type: 'string',
           description: 'Nome do projeto ou sessionId UUID. Omita se só tem 1 plano awaiting.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_answer_question',
+    description:
+      'Responde a pergunta que a tarefa de código fez. Use quando, depois de você ter ' +
+      'falado a pergunta + opções, o usuário disser qual opção quer ("a primeira", "use yup", ' +
+      '"vai de zod", "opção 2"). O texto da resposta vai pro Claude continuar a execução. ' +
+      'Sem `target` se só tem 1 pergunta pendente; com várias, target = nome do projeto ou sessionId.',
+    parameters: {
+      type: 'object',
+      properties: {
+        answer: {
+          type: 'string',
+          description:
+            'Texto da resposta do usuário, claro. Pode ser literal do que ele falou ' +
+            '("usa zod"), ou um número/label de opção quando aplicável ("opção 2: TypeScript"). ' +
+            'Seja específico — esse texto vai direto pro Claude.',
+        },
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só 1 pergunta pendente.',
+        },
+      },
+      required: ['answer'],
+    },
+  },
+  {
+    name: 'claude_reject_question',
+    description:
+      'Rejeita a pergunta da tarefa sem responder (Claude vai abortar tipicamente). ' +
+      'Use se o usuário disser "deixa", "cancela essa pergunta", "esquece".',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só 1 pendente.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_approve_permission',
+    description:
+      'Autoriza um pedido de permissão da tarefa de código (executar Bash, editar arquivo, etc). ' +
+      'Use quando, depois de você ter falado "preciso fazer X, autoriza?", o usuário disser ' +
+      '"sim", "pode", "autoriza", "vai", "manda". A sessão estava PAUSADA esperando essa ' +
+      'decisão — autorizar faz ela continuar do mesmo ponto. NÃO use claude_approve_plan ' +
+      'nem claude_answer_question pra isso (esses são pra plan/pergunta, não pra permissão).',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só 1 permissão pendente.',
+        },
+      },
+    },
+  },
+  {
+    name: 'claude_deny_permission',
+    description:
+      'Recusa um pedido de permissão da tarefa de código. Use quando o usuário disser ' +
+      '"não", "não pode", "recusa", "cancela isso". A sessão continua mas a ferramenta ' +
+      'específica não vai executar — Claude tipicamente tenta outro caminho ou avisa.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Nome do projeto ou sessionId UUID. Omita se só 1 permissão pendente.',
         },
       },
     },

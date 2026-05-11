@@ -55,6 +55,14 @@ const SYSTEM_INSTRUCTION =
   '2. Mapeamento de gatilhos pra funções:\n' +
   '   - clima/tempo → weather\n' +
   '   - tasks do ClickUp → clickup_tasks_in_progress / _high_priority / _explain_task\n' +
+  '   - cards do Trello → trello_list_lists / _list_labels / _list_cards / ' +
+  '_get_card pra leitura; _create_card / _update_card / _move_card / _archive_card / ' +
+  '_unarchive_card pra mutações; _add_comment / _add_label / _remove_label / _add_checklist / ' +
+  '_check_item / _uncheck_item pra edição fina. TODAS as tools de Trello operam EXCLUSIVAMENTE ' +
+  'no board "Pessoal" — não existe parâmetro de board e qualquer outro quadro é inacessível. ' +
+  'Antes de ações destrutivas (archive, remove_label) que o usuário não tenha pedido ' +
+  'explicitamente nessa frase, CONFIRME ("posso arquivar?"). Datas: converta horário em ' +
+  'linguagem natural pra ISO 8601 em fuso America/Asuncion antes de chamar.\n' +
   '   - tocar música/vídeo → play_youtube\n' +
   '   - resumir vídeo do YouTube ("resume esse vídeo X", "do que fala esse ' +
   'vídeo", "me explica esse vídeo do YouTube") → summarize_youtube. Pode ' +
@@ -163,6 +171,17 @@ const SYSTEM_INSTRUCTION =
   '     • Comportamento: roda assíncrona. Anuncie em 1ª pessoa o que vai ' +
   'fazer ("vou ajustar o botão"). NUNCA mencione "Claude" nem agente externo. ' +
   'Resultado chega via sistema; confirme em 1ª pessoa.\n' +
+  '     • QUESTION_READY (sistema injeta quando a tarefa de código precisa de ' +
+  'decisão sua durante a execução — vem com pergunta + lista de opções): ' +
+  'FALE a pergunta em 1ª pessoa de jeito curto e natural ("preciso decidir X. ' +
+  'tenho opções A, B ou C — qual prefere?") e ESPERE resposta.\n' +
+  '       Quando ele responder, identifique a opção escolhida e chame ' +
+  'claude_answer_question(answer=<texto que captura a escolha>). Não precisa ' +
+  'replicar o label literal — pode parafrasear a decisão se ficar claro ' +
+  '("vai com zod", "use a opção 2: TypeScript").\n' +
+  '       Se ele disser "deixa pra lá"/"cancela essa pergunta" → ' +
+  'claude_reject_question(). NUNCA mencione "Claude". Se houver várias ' +
+  'perguntas pendentes ao mesmo tempo, target=<projeto>.\n' +
   '     • PLAN_READY (sistema injeta quando complexity 7-10 termina o pass de ' +
   'planejamento): você recebe um texto descrevendo o plano + sessionId. FALE ' +
   'o plano resumido por voz em 1ª pessoa ("o plano é: vou X, depois Y, e Z. ' +
@@ -284,6 +303,32 @@ export type ToolCall = {
   args: Record<string, unknown>;
 };
 
+/**
+ * Turno consolidado da conversa — guardado em buffer pra replayar contexto
+ * após queda de WS. Tool calls do modelo viram texto resumido pra economizar
+ * tokens (não re-executamos a tool no replay).
+ */
+export type LiveTurn = {
+  role: 'user' | 'model';
+  text: string;
+  toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+};
+
+/**
+ * Pedido em voo no momento da queda: ou o usuário falou e o modelo não
+ * respondeu, ou uma tool já executou mas o áudio de confirmação foi cortado.
+ */
+export type LivePendingRequest = {
+  /** Última fala do usuário sem resposta completa do modelo. */
+  userText?: string;
+  /** Tool já executada cujo resultado não chegou a virar fala completa. */
+  unconfirmedTool?: {
+    name: string;
+    args: Record<string, unknown>;
+    response: Record<string, unknown>;
+  };
+};
+
 export type GeminiLiveListeners = {
   onState: (state: GeminiLiveState) => void;
   onAudio: (pcm24kMono: Buffer) => void;
@@ -296,7 +341,27 @@ export type GeminiLiveOptions = {
   tools?: ToolDeclaration[];
   /** Texto adicional pra anexar no system instruction (ex: fatos sobre usuário). */
   extraSystemInstruction?: string;
+  /**
+   * Camada 1 — histórico de turnos pra replayar via clientContent no setup.
+   * Tipicamente vem do `getHistorySnapshot()` da sessão anterior antes de
+   * reconnect. Limite de itens já é aplicado internamente.
+   */
+  initialHistory?: LiveTurn[];
+  /**
+   * Camada 1 — pedido em voo na sessão anterior. Vira mensagem [Sistema]
+   * após o replay pra modelo recuperar o que ficou pendente.
+   */
+  pendingRequest?: LivePendingRequest;
+  /**
+   * Camada 2 — handle de sessionResumption nativo do Gemini Live. Quando
+   * fornecido, o servidor tenta restaurar a sessão internamente; o replay
+   * manual continua acontecendo como fallback.
+   */
+  resumptionHandle?: string;
 };
+
+/** Máximo de turnos retidos no buffer de replay (3 user + 3 model). */
+const MAX_HISTORY_TURNS = 6;
 
 export class GeminiLiveClient {
   private ws: WebSocket | null = null;
@@ -317,6 +382,29 @@ export class GeminiLiveClient {
   private readonly tools: ToolDeclaration[];
   private readonly extraSystemInstruction: string;
 
+  /** Buffer de turnos consolidados — alimenta replay em reconexão. */
+  private history: LiveTurn[] = [];
+  /** Transcript do usuário acumulado pro turno em curso (vem em chunks). */
+  private currentUserText = '';
+  /** Transcript do modelo acumulado pro turno em curso. */
+  private currentModelText = '';
+  /** Tool calls que o modelo emitiu dentro do turno em curso. */
+  private currentModelToolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  /** Tool responses enviadas no turno atual — pra detectar "tool executou, fala não saiu". */
+  private currentTurnToolResponses: Array<{
+    name: string;
+    args: Record<string, unknown>;
+    response: Record<string, unknown>;
+  }> = [];
+  /** Quando há userText sem modelText completo, o turno é considerado pendente. */
+  private currentUserTurnAwaitingResponse = false;
+  /** Handle de sessionResumption fornecido pelo servidor (Camada 2). */
+  private resumptionHandle: string | null = null;
+  /** Histórico a injetar no setupComplete — limpado após primeiro replay. */
+  private restoreHistory: LiveTurn[] = [];
+  /** Pedido pendente a reanunciar — limpado após primeiro replay. */
+  private restorePending: LivePendingRequest | undefined;
+
   constructor(
     private readonly apiKey: string,
     private readonly listeners: GeminiLiveListeners,
@@ -325,6 +413,40 @@ export class GeminiLiveClient {
     this.model = options.model ?? DEFAULT_MODEL;
     this.tools = options.tools ?? [];
     this.extraSystemInstruction = options.extraSystemInstruction ?? '';
+    if (options.initialHistory && options.initialHistory.length > 0) {
+      const trimmed = options.initialHistory.slice(-MAX_HISTORY_TURNS);
+      this.history = [...trimmed];
+      this.restoreHistory = [...trimmed];
+    }
+    this.restorePending = options.pendingRequest;
+    this.resumptionHandle = options.resumptionHandle ?? null;
+  }
+
+  /** Snapshot imutável do histórico — usado pelo orquestrador antes de reconnect. */
+  getHistorySnapshot(): LiveTurn[] {
+    return this.history.map((t) => ({ ...t, toolCalls: t.toolCalls ? [...t.toolCalls] : undefined }));
+  }
+
+  /** Computa o que ficou pendente no turno em curso (se algo). */
+  getPendingRequest(): LivePendingRequest | undefined {
+    const pending: LivePendingRequest = {};
+    const userText = this.currentUserText.trim();
+    const modelText = this.currentModelText.trim();
+    // User falou e modelo ainda não tinha fechado resposta (sem turnComplete).
+    if (userText && (this.currentUserTurnAwaitingResponse || !modelText)) {
+      pending.userText = userText;
+    }
+    // Tool executou no turno atual mas o turno não foi fechado — fala foi cortada.
+    if (this.currentTurnToolResponses.length > 0) {
+      const last = this.currentTurnToolResponses[this.currentTurnToolResponses.length - 1];
+      pending.unconfirmedTool = { ...last };
+    }
+    if (!pending.userText && !pending.unconfirmedTool) return undefined;
+    return pending;
+  }
+
+  getResumptionHandle(): string | undefined {
+    return this.resumptionHandle ?? undefined;
   }
 
   isOpen(): boolean {
@@ -362,6 +484,12 @@ export class GeminiLiveClient {
         systemInstruction: { parts: [{ text: fullSystemInstruction }] },
         outputAudioTranscription: {},
         inputAudioTranscription: {},
+        // Camada 2: ativa sessionResumption. Sem handle, servidor abre sessão
+        // nova e passa a emitir handles; com handle, tenta restaurar do lado
+        // dele (TTL curto — replay manual continua valendo como fallback).
+        sessionResumption: this.resumptionHandle
+          ? { handle: this.resumptionHandle }
+          : {},
       };
       if (this.tools.length > 0) {
         setup.tools = [{ functionDeclarations: this.tools }];
@@ -514,6 +642,13 @@ export class GeminiLiveClient {
   /** Devolve o resultado de uma tool call pro Gemini; ele continua o turno. */
   sendToolResponse(id: string, name: string, response: Record<string, unknown>): void {
     if (!this.isOpen() || !this.setupDone) return;
+    // Casa com a tool call correspondente (mesmo nome) pra recuperar args.
+    const matching = this.currentModelToolCalls.find((c) => c.name === name);
+    this.currentTurnToolResponses.push({
+      name,
+      args: matching?.args ?? {},
+      response,
+    });
     this.ws!.send(
       JSON.stringify({
         toolResponse: {
@@ -533,8 +668,21 @@ export class GeminiLiveClient {
 
     if (obj.setupComplete) {
       this.setupDone = true;
+      // Replay de contexto e pedido pendente ANTES de sinalizar ready, pra
+      // o orquestrador upstream não disparar lógica conflitante (briefing,
+      // flush de webhook etc) em cima de um turno injetado.
+      this.replayContext();
       this.setState({ kind: 'ready' });
       return;
+    }
+
+    // Camada 2: servidor manda updates periódicos com handle pra retomar
+    // a sessão em caso de queda. Guardamos sempre o mais recente.
+    const sru = obj.sessionResumptionUpdate as
+      | { newHandle?: string; resumable?: boolean }
+      | undefined;
+    if (sru?.newHandle && sru.resumable !== false) {
+      this.resumptionHandle = sru.newHandle;
     }
 
     // Tool calls vêm em mensagens próprias (toolCall), não dentro de serverContent.
@@ -542,6 +690,11 @@ export class GeminiLiveClient {
     if (tc?.functionCalls?.length) {
       for (const fc of tc.functionCalls) {
         if (!fc.name) continue;
+        // Acumula no turno atual (camada 1) — usado pra resumir no replay.
+        this.currentModelToolCalls.push({
+          name: fc.name,
+          args: fc.args ?? {},
+        });
         this.listeners.onToolCall?.({
           id: fc.id ?? '',
           name: fc.name,
@@ -569,18 +722,28 @@ export class GeminiLiveClient {
         // transcript opcional (input/output transcription)
         if (part.text && !part.thought) {
           const cleaned = stripControlTokens(part.text);
-          if (cleaned) this.listeners.onTranscript?.(cleaned, 'model');
+          if (cleaned) {
+            this.currentModelText += cleaned;
+            this.listeners.onTranscript?.(cleaned, 'model');
+          }
         }
       }
     }
 
     if (sc.inputTranscription?.text) {
       const cleaned = stripControlTokens(sc.inputTranscription.text);
-      if (cleaned) this.listeners.onTranscript?.(cleaned, 'user');
+      if (cleaned) {
+        this.currentUserText += cleaned;
+        this.currentUserTurnAwaitingResponse = true;
+        this.listeners.onTranscript?.(cleaned, 'user');
+      }
     }
     if (sc.outputTranscription?.text) {
       const cleaned = stripControlTokens(sc.outputTranscription.text);
-      if (cleaned) this.listeners.onTranscript?.(cleaned, 'model');
+      if (cleaned) {
+        this.currentModelText += cleaned;
+        this.listeners.onTranscript?.(cleaned, 'model');
+      }
     }
 
     // turnComplete sempre força ready — mesmo quando o modelo não chegou a
@@ -589,8 +752,104 @@ export class GeminiLiveClient {
     // do transcript do modelo aberto e a próxima resposta gruda na bolha
     // anterior.
     if (sc.interrupted || sc.turnComplete) {
+      this.flushTurnToHistory();
       this.modelSpeaking = false;
       this.setState({ kind: 'ready' });
+    }
+  }
+
+  /**
+   * Move o turno em curso pro histórico. Chamado em turnComplete/interrupted.
+   * User e model viram itens separados na ordem em que entraram.
+   */
+  private flushTurnToHistory(): void {
+    const userText = this.currentUserText.trim();
+    const modelText = this.currentModelText.trim();
+    if (userText) {
+      this.history.push({ role: 'user', text: userText });
+    }
+    if (modelText || this.currentModelToolCalls.length > 0) {
+      const entry: LiveTurn = { role: 'model', text: modelText };
+      if (this.currentModelToolCalls.length > 0) {
+        entry.toolCalls = [...this.currentModelToolCalls];
+      }
+      this.history.push(entry);
+    }
+    if (this.history.length > MAX_HISTORY_TURNS) {
+      this.history = this.history.slice(-MAX_HISTORY_TURNS);
+    }
+    this.currentUserText = '';
+    this.currentModelText = '';
+    this.currentModelToolCalls = [];
+    this.currentTurnToolResponses = [];
+    this.currentUserTurnAwaitingResponse = false;
+  }
+
+  /**
+   * Camada 1: injeta histórico + pedido pendente após setupComplete. Histórico
+   * vai como `clientContent` sem `turnComplete` (só carrega contexto pro
+   * modelo); pedido pendente vai como mensagem [Sistema] com `turnComplete:
+   * true` pra disparar resposta.
+   */
+  private replayContext(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    if (this.restoreHistory.length > 0) {
+      const turns = this.restoreHistory.map((t) => {
+        let text = t.text;
+        if (t.role === 'model' && t.toolCalls && t.toolCalls.length > 0) {
+          const summary = t.toolCalls
+            .map((tc) => `${tc.name}(${JSON.stringify(tc.args).slice(0, 120)})`)
+            .join(', ');
+          text = text
+            ? `${text}\n[chamou: ${summary}]`
+            : `[chamou: ${summary}]`;
+        }
+        return { role: t.role, parts: [{ text: text || '(sem texto)' }] };
+      });
+      try {
+        this.ws.send(
+          JSON.stringify({
+            clientContent: { turns, turnComplete: false },
+          }),
+        );
+      } catch (err) {
+        console.warn('[gemini-live] replay history falhou:', err);
+      }
+      this.restoreHistory = [];
+    }
+
+    if (this.restorePending) {
+      const parts: string[] = [];
+      if (this.restorePending.unconfirmedTool) {
+        const t = this.restorePending.unconfirmedTool;
+        parts.push(
+          `A operação ${t.name}(${JSON.stringify(t.args).slice(0, 200)}) ` +
+            `JÁ FOI EXECUTADA com resultado ${JSON.stringify(t.response).slice(0, 200)}. ` +
+            `NÃO chame a tool de novo. Apenas confirme verbalmente em 1 frase curta.`,
+        );
+      } else if (this.restorePending.userText) {
+        parts.push(
+          `O usuário pediu "${this.restorePending.userText.slice(0, 300)}" ` +
+            `mas a conexão caiu antes de você responder. Retome de onde parou.`,
+        );
+      }
+      if (parts.length > 0) {
+        const msg = `[Sistema] Sessão retomada após queda. ${parts.join(' ')}`;
+        try {
+          this.ws.send(
+            JSON.stringify({
+              clientContent: {
+                turns: [{ role: 'user', parts: [{ text: msg }] }],
+                turnComplete: true,
+              },
+            }),
+          );
+        } catch (err) {
+          console.warn('[gemini-live] replay pending falhou:', err);
+        }
+      }
+      this.restorePending = undefined;
     }
   }
 

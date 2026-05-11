@@ -23,6 +23,16 @@ export interface RunnerOptions {
   appendSystemPrompt?: string;
   /** Override do permission mode (default: pixxel project → bypass, outros → acceptEdits). */
   permissionMode?: PermissionMode;
+  /** JSON do --mcp-config (inline). Pixxel passa pra Claude ver tool `pixxel__ask_user`. */
+  mcpConfigJson?: string;
+  /** Lista de tools a desabilitar via --disallowedTools (ex: ['AskUserQuestion']). */
+  disallowedTools?: string[];
+  /**
+   * Nome da tool MCP que vai receber pedidos de permissão (ex:
+   * `mcp__pixxel__permission_prompt`). Quando setado, o CLI roteia pedidos
+   * de permissão pra essa tool em vez de bloquear/negar silenciosamente.
+   */
+  permissionPromptTool?: string;
 }
 
 export interface RunnerEvents {
@@ -56,16 +66,27 @@ export class ClaudeRunner extends EventEmitter {
     const args = [
       '-p',
       opts.task,
-      '--session-id',
-      opts.sessionId,
       '--output-format',
       'stream-json',
       '--verbose',
       '--permission-mode',
       permissionMode,
     ];
-    if (opts.resume) args.push('--resume', opts.sessionId);
+    // `--session-id` e `--resume` são mutuamente exclusivos sem `--fork-session`.
+    // Em resume, o session-id é determinado pelo próprio `--resume <id>`.
+    if (opts.resume) {
+      args.push('--resume', opts.sessionId);
+    } else {
+      args.push('--session-id', opts.sessionId);
+    }
     if (opts.appendSystemPrompt) args.push('--append-system-prompt', opts.appendSystemPrompt);
+    if (opts.mcpConfigJson) args.push('--mcp-config', opts.mcpConfigJson);
+    if (opts.disallowedTools && opts.disallowedTools.length > 0) {
+      args.push('--disallowedTools', ...opts.disallowedTools);
+    }
+    if (opts.permissionPromptTool) {
+      args.push('--permission-prompt-tool', opts.permissionPromptTool);
+    }
 
     const env = sanitizeEnv(process.env);
 

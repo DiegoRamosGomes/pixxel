@@ -396,6 +396,15 @@ export function App() {
             ),
           );
           break;
+        case 'claude_session_question_ready':
+          setClaudeSessions((prev) =>
+            prev.map((s) =>
+              s.sessionId === event.sessionId
+                ? { ...s, status: 'awaiting_user_input', pendingQuestion: event.question }
+                : s,
+            ),
+          );
+          break;
         case 'claude_session_done': {
           const sessionId = event.sessionId;
           setClaudeSessions((prev) =>

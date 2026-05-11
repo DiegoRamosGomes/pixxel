@@ -274,3 +274,68 @@ Ideias capturadas em conversa por voz com o Pixxel.
 - **Caso multi-pessoa não está definido.** Se Diego e Kamila aparecem juntos, qual vira `owner`? Decidir regra (maior bounding box / quem falou por último / pergunta) antes de ligar à lógica de `start_work` e `study_plan_next`, senão o contexto vai oscilar de forma confusa.
 - **Alternativa muito mais simples (recomendada pra v1):** o Gemini multimodal já recebe o frame. Em vez de embed local, mandar junto 1-2 fotos de referência por pessoa (prompt cache) e pedir "quem está nessa imagem? responde só o nome ou 'desconhecido'". Zero dependência nova, zero modelo pra baixar, ~30 linhas em `vision.ts`. Só migrar pra face-api/MediaPipe se latência/custo Gemini incomodar — mesmo arco do Maps/WhatsApp acima.
 - **Privacidade ≠ "armazenamento seguro".** Embedding facial é dado biométrico; o mínimo é (1) arquivo só local em `app.getPath('userData')`, (2) opção de apagar por pessoa na UI, (3) nunca subir embedding nem foto-de-cadastro pro Gemini. O plano atual fica em genérico — vale escrever isso explícito antes de implementar.
+
+### Watchlist do dktv via WhatsApp da Kamila
+<!-- anchor: 2026-05-10-watchlist-dktv-whatsapp-kamila -->
+- **Status:** ideia (2026-05-10)
+- **O quê:** quando a integração WhatsApp do Pixxel sair, detectar mensagens da Kamila pedindo "baixa o filme X" e registrar X numa watchlist do dktv (streaming pessoal do Diego em https://dktv.vercel.app, código em `~/Projects/dk/dktv`, filmes hospedados na VPS). Pixxel anota, Diego baixa depois.
+- **Por quê:** hoje pedidos da Kamila se perdem em conversa do WhatsApp; centralizar numa fila evita esquecimento e dá ao Pixxel um hook útil sem exigir comando explícito.
+- **Notas:**
+  - Tratar como function call dedicada (`dktv_add_to_watchlist(title, requester)`), não como side-effect genérico de leitura de mensagem — evita o Pixxel criar entrada em qualquer "será que tem o filme tal?".
+  - Persistência no próprio dktv (DB/JSON na VPS), não na memória do Pixxel — watchlist é dado do dktv, Pixxel só escreve nela.
+  - Confirmar formato com Diego antes de implementar — pode querer metadata extra (ano, prioridade, quem pediu, status "baixado").
+  - Depende da integração WhatsApp resolver primeiro a parte mais arriscada (Baileys vs `wa.me`, ver entradas anteriores). Pra leitura de mensagens vale mesmo o cuidado de privacidade — só rotear pro `dktv_add_to_watchlist` se bater padrão claro de pedido.
+
+### App mobile do Pixxel pra Kamila (Android)
+<!-- anchor: 2026-05-10-app-mobile-pixxel-kamila-android -->
+- **Status:** ideia (2026-05-10)
+- **O quê:** app Android do Pixxel pra Kamila usar no celular dela — escopo reduzido vs desktop, focado em voz + integrações que fazem sentido pra ela (WhatsApp, agenda compartilhada, pedido de filme pro dktv, etc.), sem ferramentas de dev.
+- **Por quê:** Pixxel hoje é só desktop e atende o Diego. Várias ideias em discussão (watchlist dktv, WhatsApp) já têm a Kamila como atora natural — faz sentido ela ter o assistente no bolso pra coisas do dia-a-dia do casal.
+- **Notas:**
+  - Stack JS/TS end-to-end (preferência forte do Diego). React Native/Expo é o caminho default.
+  - Backend do Pixxel hoje está congelado até Fase 3 — app mobile provavelmente força destravar essa fase pra ter ponto de sincronização entre desktop dele e mobile dela (Gemini Live por si só não compartilha estado entre clientes).
+  - Definir personas explicitamente: o que Kamila pode fazer ≠ o que Diego pode fazer (ex.: ela pede filme, ele aprova/baixa; ela vê agenda compartilhada, não a dele privada).
+  - Reaproveita a função de reconhecimento de voz da Kamila já existente no desktop — no mobile dela, é sempre ela, simplifica.
+  - Push notifications (já há infra Expo no projeto) viram canal natural pra avisar Kamila de coisas que o Pixxel coletou.
+
+### API do Pixxel não responde / Indicador 'conectando'
+<!-- anchor: 2026-05-11-api-do-pixxel-nao-responde-indicador-conectando -->
+- **Status:** ideia (2026-05-11)
+- **O quê:** Usuário notou que o indicador de conexão está sempre 'conectando', sugerindo que a API do pixxel pode não estar respondendo. Isso está relacionado ao feedback anterior para remover tentativas de reconexão automática.
+
+### trello_integration
+<!-- anchor: 2026-05-11-trello-integration -->
+- **Status:** planejado (2026-05-11)
+- **O quê:** Integração completa com o Trello para criação, edição (etiquetas, datas, checklists, comentários), movimentação e arquivamento automático e manual de tarefas, centralizando a organização.
+
+#### Plano (Gemini)
+
+**Plano de Implementação: Integração Trello**
+
+**1. Configuração Inicial e Autenticação**
+- Criar um novo projeto ou módulo para a integração (`trello-integration`).
+- Configurar variáveis de ambiente para `TRELLO_API_KEY` e `TRELLO_TOKEN`.
+- Implementar fluxo de autenticação OAuth para obter e persistir o token do usuário.
+
+**2. Mapeamento e Estrutura**
+- Definir a estrutura de dados para mapear conceitos do Pixxel (tarefas, projetos) com Boards, Lists e Cards do Trello.
+- Criar serviços para buscar Boards e Lists disponíveis, permitindo ao usuário configurar onde as tarefas serão gerenciadas.
+
+**3. Implementação de Funcionalidades CRUD**
+- **Criação:** Implementar `createCard` (criar tarefas) com campos para título, descrição, data de vencimento (`due`), e membros.
+- **Edição:** Desenvolver `updateCard` para suportar:
+    - Adição/remoção de etiquetas (`labels`).
+    - Definição de datas (`due`).
+    - Gestão de checklists (`checklists`).
+    - Adição de comentários (`comments`).
+- **Movimentação:** Criar `moveCard` para permitir mover cards entre listas (`lists`) específicas.
+- **Arquivamento:** Implementar `archiveCard` para arquivar tarefas concluídas ou descartadas.
+
+**4. Automação e Sincronização (Webhooks)**
+- Configurar e gerenciar webhooks do Trello para sincronização automática.
+- Receber notificações de criação, atualização e movimentação de cards para refletir o estado no Pixxel e vice-versa.
+
+**Riscos e Alternativas:**
+- Risco: Limitações da API do Trello ou quotas podem impactar a sincronização em tempo real.
+- Alternativa: Implementar sincronização periódica (polling) como fallback.
+- Dependências: `axios` para requisições HTTP, bibliotecas de criptografia para armazenamento seguro do token.

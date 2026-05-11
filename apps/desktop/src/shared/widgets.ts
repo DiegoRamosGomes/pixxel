@@ -109,6 +109,40 @@ export type StorageWidget = {
   }>;
 };
 
+export type TrelloCardsListWidget = {
+  kind: 'trello-cards';
+  title: string;
+  boardName?: string;
+  cards: Array<{
+    id: string;
+    name: string;
+    url?: string;
+    due?: string;
+    dueComplete?: boolean;
+  }>;
+};
+
+export type TrelloCardDetailWidget = {
+  kind: 'trello-card-detail';
+  card: {
+    id: string;
+    name: string;
+    desc: string;
+    due?: string;
+    dueComplete?: boolean;
+    closed: boolean;
+    url?: string;
+    boardName: string;
+    listName?: string;
+  };
+  labels: Array<{ name: string; color?: string }>;
+  checklists: Array<{
+    name: string;
+    items: Array<{ name: string; complete: boolean }>;
+  }>;
+  comments: Array<{ author: string; text: string; date?: string }>;
+};
+
 export type Widget =
   | WeatherWidget
   | TasksListWidget
@@ -117,4 +151,6 @@ export type Widget =
   | SearchResultsWidget
   | StorageWidget
   | NotificationsWidget
-  | BuildStatusWidget;
+  | BuildStatusWidget
+  | TrelloCardsListWidget
+  | TrelloCardDetailWidget;

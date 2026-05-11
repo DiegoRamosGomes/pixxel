@@ -7,6 +7,8 @@ import { SearchResultsCard } from './SearchResultsCard.js';
 import { StorageCard } from './StorageCard.js';
 import { NotificationsCard } from './NotificationsCard.js';
 import { BuildStatusCard } from './BuildStatusCard.js';
+import { TrelloCardsListCard } from './TrelloCardsListCard.js';
+import { TrelloCardDetailCard } from './TrelloCardDetailCard.js';
 import { useDragHandle } from './useDragHandle.js';
 
 type Props = {
@@ -69,5 +71,9 @@ function renderInner(widget: Widget) {
       return <NotificationsCard data={widget} />;
     case 'build-status':
       return <BuildStatusCard data={widget} />;
+    case 'trello-cards':
+      return <TrelloCardsListCard data={widget} />;
+    case 'trello-card-detail':
+      return <TrelloCardDetailCard data={widget} />;
   }
 }

@@ -36,6 +36,33 @@ import {
   type TopicStatus,
 } from './study-plans.js';
 import { getActiveWorkStore, formatRelativeAge, type WorkEntry } from './active-work.js';
+import {
+  addChecklist,
+  addCommentToCard,
+  addLabelToCard,
+  archiveCard,
+  cardDetailToWidget,
+  cardsToWidget,
+  checkChecklistItem,
+  createCard,
+  formatCardDetailForVoice,
+  formatCardsForVoice,
+  getCard,
+  getChecklists,
+  getComments,
+  getLockedBoard,
+  isTrelloAvailable,
+  listCardsInBoard,
+  listCardsInList,
+  listLabelsForBoard,
+  listListsForBoard,
+  moveCard,
+  removeLabelFromCard,
+  resolveBoard,
+  resolveCard,
+  unarchiveCard,
+  updateCard,
+} from './trello.js';
 
 function shortSender(from: string): string {
   // "Nome <email@host>" → "Nome" se houver, senão domínio.
@@ -950,6 +977,358 @@ export async function executeIntegration(
       return { ok: true, text: parts.join(' ') };
     }
 
+    case 'trello_list_lists': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const boardHint = args.board ? String(args.board) : undefined;
+      const br = await resolveBoard(boardHint);
+      if (!br.board) return { ok: false, reason: br.reason ?? 'board não resolvido' };
+      const lists = await listListsForBoard(br.board.id);
+      if (!lists) return { ok: false, reason: 'falhou ao listar listas' };
+      if (lists.length === 0) {
+        return { ok: true, text: `Board "${br.board.name}" não tem listas.` };
+      }
+      const lines = lists.map((l) => `• ${l.name}`);
+      return {
+        ok: true,
+        text: `Listas do board "${br.board.name}":\n${lines.join('\n')}`,
+        meta: { boardId: br.board.id, lists },
+      };
+    }
+
+    case 'trello_list_labels': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const boardHint = args.board ? String(args.board) : undefined;
+      const br = await resolveBoard(boardHint);
+      if (!br.board) return { ok: false, reason: br.reason ?? 'board não resolvido' };
+      const labels = await listLabelsForBoard(br.board.id);
+      if (!labels) return { ok: false, reason: 'falhou ao listar labels' };
+      const named = labels.filter((l) => l.name);
+      if (named.length === 0) {
+        return {
+          ok: true,
+          text: `Board "${br.board.name}" não tem etiquetas nomeadas.`,
+        };
+      }
+      const lines = named.map((l) => `• ${l.name}${l.color ? ` (${l.color})` : ''}`);
+      return {
+        ok: true,
+        text: `Etiquetas do board "${br.board.name}":\n${lines.join('\n')}`,
+        meta: { labels: named },
+      };
+    }
+
+    case 'trello_list_cards': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const boardHint = args.board ? String(args.board) : undefined;
+      const listHint = args.list ? String(args.list) : undefined;
+      const br = await resolveBoard(boardHint);
+      if (!br.board) return { ok: false, reason: br.reason ?? 'board não resolvido' };
+
+      let listName: string | undefined;
+      let cards;
+      if (listHint) {
+        const lists = await listListsForBoard(br.board.id);
+        if (!lists) return { ok: false, reason: 'falhou ao listar listas' };
+        const target =
+          lists.find((l) => l.id === listHint) ??
+          lists.find((l) =>
+            l.name.toLowerCase().includes(listHint.toLowerCase()),
+          );
+        if (!target) {
+          return {
+            ok: false,
+            reason: `nenhuma lista casa com "${listHint}" no board "${br.board.name}"`,
+          };
+        }
+        listName = target.name;
+        cards = await listCardsInList(target.id);
+      } else {
+        cards = await listCardsInBoard(br.board.id);
+      }
+      if (!cards) return { ok: false, reason: 'falhou ao listar cards' };
+      return {
+        ok: true,
+        text: formatCardsForVoice(cards, listName),
+        widget: cardsToWidget(
+          listName ?? `Cards do board ${br.board.name}`,
+          cards,
+          br.board.name,
+        ),
+      };
+    }
+
+    case 'trello_get_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      const boardHint = args.board ? String(args.board) : undefined;
+      const cr = await resolveCard(cardHint, boardHint);
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+
+      const br = await resolveBoard(cr.card.idBoard);
+      const board = br.board;
+      if (!board) return { ok: false, reason: 'board do card não encontrado' };
+
+      const [lists, labels, checklists, comments] = await Promise.all([
+        listListsForBoard(board.id),
+        listLabelsForBoard(board.id),
+        getChecklists(cr.card.id),
+        getComments(cr.card.id),
+      ]);
+      const list = lists?.find((l) => l.id === cr.card!.idList) ?? undefined;
+      const cardLabels =
+        labels?.filter((l) => cr.card!.idLabels.includes(l.id)) ?? [];
+
+      const detail = {
+        card: cr.card,
+        board,
+        list,
+        labels: cardLabels,
+        checklists: checklists ?? [],
+        comments: comments ?? [],
+      };
+      return {
+        ok: true,
+        text: formatCardDetailForVoice(detail),
+        widget: cardDetailToWidget(detail),
+      };
+    }
+
+    case 'trello_create_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const name = String(args.name ?? '').trim();
+      const listHint = String(args.list ?? '').trim();
+      if (!name) return { ok: false, reason: 'name vazio' };
+      if (!listHint) return { ok: false, reason: 'list vazio' };
+      const labelHints = Array.isArray(args.labels)
+        ? args.labels.map((l) => String(l))
+        : undefined;
+      const r = await createCard({
+        name,
+        desc: args.desc ? String(args.desc) : undefined,
+        due: args.due ? String(args.due) : undefined,
+        listHint,
+        boardHint: args.board ? String(args.board) : undefined,
+        labelHints,
+      });
+      if (!r.ok) return { ok: false, reason: r.reason };
+      return {
+        ok: true,
+        text:
+          `Criei o card "${r.card.name}" na lista "${r.list.name}" do board "${r.board.name}".` +
+          (r.card.due ? ` Vencimento: ${new Date(r.card.due).toLocaleDateString('pt-BR')}.` : ''),
+        meta: { cardId: r.card.id, url: r.card.shortUrl ?? r.card.url },
+      };
+    }
+
+    case 'trello_update_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      const boardHint = args.board ? String(args.board) : undefined;
+      const cr = await resolveCard(cardHint, boardHint);
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+      const patch: Parameters<typeof updateCard>[1] = {};
+      if (typeof args.name === 'string') patch.name = args.name;
+      if (typeof args.desc === 'string') patch.desc = args.desc;
+      if (args.due === null) patch.due = null;
+      else if (typeof args.due === 'string') patch.due = args.due;
+      if (typeof args.due_complete === 'boolean') patch.dueComplete = args.due_complete;
+      const updated = await updateCard(cr.card.id, patch);
+      if (!updated) return { ok: false, reason: 'falhou ao atualizar card' };
+      const changed = Object.keys(patch);
+      return {
+        ok: true,
+        text:
+          changed.length > 0
+            ? `Atualizei "${updated.name}": ${changed.join(', ')}.`
+            : `Card "${updated.name}" sem alterações.`,
+        meta: { cardId: updated.id },
+      };
+    }
+
+    case 'trello_move_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      const targetList = String(args.list ?? '').trim();
+      if (!cardHint || !targetList) {
+        return { ok: false, reason: 'card e list são obrigatórios' };
+      }
+      const r = await moveCard(
+        cardHint,
+        targetList,
+        args.board ? String(args.board) : undefined,
+      );
+      if (!r.ok) return { ok: false, reason: r.reason };
+      return {
+        ok: true,
+        text: `Movi "${r.card.name}" para "${r.list.name}".`,
+        meta: { cardId: r.card.id, listId: r.list.id },
+      };
+    }
+
+    case 'trello_archive_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      const cr = await resolveCard(
+        cardHint,
+        args.board ? String(args.board) : undefined,
+      );
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+      const updated = await archiveCard(cr.card.id);
+      if (!updated) return { ok: false, reason: 'falhou ao arquivar card' };
+      return {
+        ok: true,
+        text: `Arquivei "${updated.name}".`,
+        meta: { cardId: updated.id },
+      };
+    }
+
+    case 'trello_unarchive_card': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      // Card arquivado normalmente não aparece em listCardsInBoard; aceitar só ID direto.
+      const direct = await getCard(cardHint);
+      if (!direct) return { ok: false, reason: 'card não encontrado (passe o ID)' };
+      const lockedBoard = await getLockedBoard();
+      if (!lockedBoard) {
+        return { ok: false, reason: 'board permitido não encontrado' };
+      }
+      if (direct.idBoard !== lockedBoard.id) {
+        return {
+          ok: false,
+          reason: `card não pertence ao board "${lockedBoard.name}" (acesso restrito)`,
+        };
+      }
+      const updated = await unarchiveCard(direct.id);
+      if (!updated) return { ok: false, reason: 'falhou ao desarquivar card' };
+      return {
+        ok: true,
+        text: `Desarquivei "${updated.name}".`,
+        meta: { cardId: updated.id },
+      };
+    }
+
+    case 'trello_add_comment': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      const text = String(args.text ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      if (!text) return { ok: false, reason: 'text vazio' };
+      const cr = await resolveCard(
+        cardHint,
+        args.board ? String(args.board) : undefined,
+      );
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+      const r = await addCommentToCard(cr.card.id, text);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      return {
+        ok: true,
+        text: `Comentei em "${cr.card.name}".`,
+        meta: { cardId: cr.card.id },
+      };
+    }
+
+    case 'trello_add_label':
+    case 'trello_remove_label': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      const labelHint = String(args.label ?? '').trim();
+      if (!cardHint || !labelHint) {
+        return { ok: false, reason: 'card e label são obrigatórios' };
+      }
+      const boardHint = args.board ? String(args.board) : undefined;
+      const action =
+        name === 'trello_add_label' ? addLabelToCard : removeLabelFromCard;
+      const r = await action(cardHint, labelHint, boardHint);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      const verb = name === 'trello_add_label' ? 'adicionei' : 'removi';
+      return {
+        ok: true,
+        text: `${verb[0].toUpperCase()}${verb.slice(1)} a etiqueta "${r.label.name}".`,
+        meta: { labelId: r.label.id },
+      };
+    }
+
+    case 'trello_add_checklist': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      const checklistName = String(args.name ?? '').trim();
+      if (!cardHint) return { ok: false, reason: 'card vazio' };
+      if (!checklistName) return { ok: false, reason: 'name vazio' };
+      const items = Array.isArray(args.items)
+        ? args.items.map((i) => String(i)).filter(Boolean)
+        : [];
+      const cr = await resolveCard(
+        cardHint,
+        args.board ? String(args.board) : undefined,
+      );
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+      const r = await addChecklist(cr.card.id, checklistName, items);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      return {
+        ok: true,
+        text:
+          items.length > 0
+            ? `Criei checklist "${checklistName}" em "${cr.card.name}" com ${items.length} item(s).`
+            : `Criei checklist "${checklistName}" em "${cr.card.name}".`,
+        meta: { checklistId: r.checklist.id, cardId: cr.card.id },
+      };
+    }
+
+    case 'trello_check_item':
+    case 'trello_uncheck_item': {
+      if (!isTrelloAvailable()) {
+        return { ok: false, reason: 'TRELLO_API_KEY/TRELLO_TOKEN não configurados' };
+      }
+      const cardHint = String(args.card ?? '').trim();
+      const itemHint = String(args.item ?? '').trim();
+      if (!cardHint || !itemHint) {
+        return { ok: false, reason: 'card e item são obrigatórios' };
+      }
+      const cr = await resolveCard(
+        cardHint,
+        args.board ? String(args.board) : undefined,
+      );
+      if (!cr.card) return { ok: false, reason: cr.reason ?? 'card não encontrado' };
+      const complete = name === 'trello_check_item';
+      const r = await checkChecklistItem(cr.card.id, itemHint, complete);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      return {
+        ok: true,
+        text: complete
+          ? `Marquei "${r.item.name}" como concluído.`
+          : `Desmarquei "${r.item.name}".`,
+        meta: { itemId: r.item.id },
+      };
+    }
+
     default:
       return null;
   }
@@ -997,4 +1376,19 @@ export const INTEGRATION_NAMES = new Set<string>([
   'desktop_mouse',
   'desktop_type',
   'desktop_key',
+  'trello_list_lists',
+  'trello_list_labels',
+  'trello_list_cards',
+  'trello_get_card',
+  'trello_create_card',
+  'trello_update_card',
+  'trello_move_card',
+  'trello_archive_card',
+  'trello_unarchive_card',
+  'trello_add_comment',
+  'trello_add_label',
+  'trello_remove_label',
+  'trello_add_checklist',
+  'trello_check_item',
+  'trello_uncheck_item',
 ]);

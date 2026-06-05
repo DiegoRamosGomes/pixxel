@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Pixxel",
+    "slug": "pixxel",
+    "scheme": "pixxel",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0e1a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.pixxel.mobile"
+    },
+    "android": {
+      "package": "app.pixxel.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0e1a"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-audio"
+    ]
+  }
+}

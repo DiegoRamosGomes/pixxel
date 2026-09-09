@@ -339,3 +339,13 @@ Ideias capturadas em conversa por voz com o Pixxel.
 - Risco: Limitações da API do Trello ou quotas podem impactar a sincronização em tempo real.
 - Alternativa: Implementar sincronização periódica (polling) como fallback.
 - Dependências: `axios` para requisições HTTP, bibliotecas de criptografia para armazenamento seguro do token.
+
+### Aplicativo móvel Pixxel
+<!-- anchor: 2026-05-11-aplicativo-movel-pixxel -->
+- **Status:** ideia (2026-05-11)
+- **O quê:** Criar um aplicativo móvel para usar o Pixxel no celular, definindo as funcionalidades necessárias.
+
+### Ajustes de implementação de conexão com backend
+<!-- anchor: 2026-05-16-ajustes-de-implementacao-de-conexao-com-backend -->
+- **Status:** ideia (2026-05-16)
+- **O quê:** Analisar a implementação da conexão com o backend (backend, desktop e mobile) e aplicar os ajustes sugeridos no log da tarefa para corrigir o código morto e os riscos de segurança.

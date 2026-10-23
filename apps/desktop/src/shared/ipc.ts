@@ -5,14 +5,8 @@ export type { Widget } from './widgets.js';
 
 export type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
-export type LiveState =
-  | { kind: 'idle' }
-  | { kind: 'unavailable'; reason: string }
-  | { kind: 'connecting' }
-  | { kind: 'ready' }
-  | { kind: 'speaking' }
-  | { kind: 'error'; code: string; message: string }
-  | { kind: 'closed'; reason: string };
+export type { LiveState } from '@assistant/shared';
+import type { LiveState } from '@assistant/shared';
 
 export type RendererEvent =
   | { type: 'conn'; state: ConnState; reason?: string }

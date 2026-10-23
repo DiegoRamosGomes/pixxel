@@ -70,10 +70,26 @@ function htmlToText(html: string): string {
   return collapse(decodeEntities(html.replace(/<[^>]*>/g, ' ')));
 }
 
+// Pontos que não fecham frase: títulos abreviados ("Dr. Silva").
+const ABBREVIATIONS = new Set(['dr', 'dra', 'sr', 'sra', 'srta', 'prof', 'profa', 'eng', 'av', 'jr', 'cia', 'ltda', 'vs']);
+
+/** Até o fim da primeira frase. Iniciais ("J.P. Morgan") e títulos não contam como fim. */
+function firstSentence(text: string): string | undefined {
+  for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
+    const at = m.index ?? 0;
+    if (m[0] === '.') {
+      const word = text.slice(0, at).split(/\s/).pop() ?? '';
+      if (/^(?:\p{L}\.)*\p{L}$/u.test(word) || ABBREVIATIONS.has(word.toLowerCase())) continue;
+    }
+    return text.slice(0, at + 1);
+  }
+  return undefined;
+}
+
 /** Primeira frase com até SUMMARY_MAX caracteres; senão corta em fim de palavra. */
 function shortenSummary(text: string): string {
   if (!text) return '';
-  const sentence = text.match(/^.+?[.!?](?=\s|$)/)?.[0];
+  const sentence = firstSentence(text);
   if (sentence && sentence.length <= SUMMARY_MAX) return sentence;
   if (text.length <= SUMMARY_MAX) return text;
   const cut = text.slice(0, SUMMARY_MAX + 1);

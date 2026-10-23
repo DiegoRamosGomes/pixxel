@@ -97,6 +97,21 @@ Texto do resumo.</description></item>`);
     expect(parseRss(xml, 'g1')[0].summary).toBe('Primeira frase.');
   });
 
+  it('não corta a frase em iniciais nem em título abreviado', () => {
+    const resumo = (texto: string) =>
+      parseRss(
+        wrap(`<item><title>T</title><link>https://x.com/a</link><atom:subtitle>${texto}</atom:subtitle></item>`),
+        'g1',
+      )[0].summary;
+    expect(resumo('Estimativa do J.P. Morgan aponta alta no setor. Outra frase.')).toBe(
+      'Estimativa do J.P. Morgan aponta alta no setor.',
+    );
+    expect(resumo('O Dr. Silva disse que a vacina funciona. Outra frase.')).toBe(
+      'O Dr. Silva disse que a vacina funciona.',
+    );
+    expect(resumo('Venda subiu 3 vezes. Analistas comemoram.')).toBe('Venda subiu 3 vezes.');
+  });
+
   it('sem pubDate', () => {
     const xml = wrap(`<item><title>T</title><link>https://x.com/a</link></item>`);
     const [item] = parseRss(xml, 'g1');

@@ -12,6 +12,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { screen } from 'electron';
+import { macMoveArg } from './darwin.js';
 
 const execP = promisify(exec);
 const execFileP = promisify(execFile);
@@ -23,6 +24,7 @@ const isMac = (): boolean => process.platform === 'darwin';
 let macMoveInFlight = false;
 let macPendingMove: { x: number; y: number } | null = null;
 let macScrollWarned = false;
+let macMouseDown = false;
 
 function cliclick(...args: string[]): Promise<void> {
   return execFileP('cliclick', args, { timeout: 5000 }).then(
@@ -37,7 +39,7 @@ function macMove(x: number, y: number): void {
     return;
   }
   macMoveInFlight = true;
-  void cliclick(`m:${x},${y}`).finally(() => {
+  void cliclick(macMoveArg(x, y, macMouseDown)).finally(() => {
     macMoveInFlight = false;
     const next = macPendingMove;
     macPendingMove = null;
@@ -106,6 +108,7 @@ export function clickMouseFast(button: 1 | 2 | 3 = 1): void {
 /** Press/release pra drag. */
 export function mouseDownFast(button: 1 | 2 | 3 = 1): void {
   if (isMac()) {
+    macMouseDown = true;
     void cliclick('dd:.');
     return;
   }
@@ -119,6 +122,7 @@ export function mouseDownFast(button: 1 | 2 | 3 = 1): void {
 
 export function mouseUpFast(button: 1 | 2 | 3 = 1): void {
   if (isMac()) {
+    macMouseDown = false;
     void cliclick('du:.');
     return;
   }
@@ -153,6 +157,7 @@ export function scrollMouseFast(direction: 'up' | 'down', ticks = 1): void {
 /** Encerra o processo persistente — chamar ao desativar o modo. */
 export function stopHandMouse(): void {
   macPendingMove = null;
+  macMouseDown = false;
   if (!proc) return;
   try {
     proc.stdin.end();

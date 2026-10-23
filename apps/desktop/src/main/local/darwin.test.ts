@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mediaKeyScript, parseIpconfigSsid, parseWifiDevice, toCliclickArgs } from './darwin.js';
+import { macMoveArg, mediaKeyScript, parseIpconfigSsid, parseWifiDevice, toCliclickArgs } from './darwin.js';
 
 describe('macOS: teclado via cliclick', () => {
   it('ctrl+c vira kd/t/ku', () => {
@@ -51,5 +51,12 @@ describe('macOS: teclas de mídia', () => {
     expect(mediaKeyScript('next')).toContain('post(17, true)');
     expect(mediaKeyScript('play_pause')).toContain('post(16, false)');
     expect(mediaKeyScript('previous')).toContain('post(18, true)');
+  });
+});
+
+describe('macOS: mouse por gestos', () => {
+  it('com o botão pressionado o movimento vira arrasto', () => {
+    expect(macMoveArg(10, 20, false)).toBe('m:10,20');
+    expect(macMoveArg(10, 20, true)).toBe('dm:10,20');
   });
 });

@@ -56,6 +56,11 @@ export function toCliclickArgs(combo: string): string[] {
   return [`kd:${m}`, press, `ku:${m}`];
 }
 
+/** Movimento do cliclick: com o botão pressionado precisa de `dm:` pra gerar arrasto. */
+export function macMoveArg(x: number, y: number, dragging: boolean): string {
+  return `${dragging ? 'dm' : 'm'}:${x},${y}`;
+}
+
 /** `networksetup -listallhardwareports` → device do Wi-Fi (ex.: en0). */
 export function parseWifiDevice(output: string): string | null {
   const m = output.match(/Hardware Port: Wi-Fi\s*\nDevice: (\S+)/);

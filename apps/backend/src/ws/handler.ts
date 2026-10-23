@@ -25,6 +25,8 @@ export type HandlerDeps = {
   registry: ClientRegistry;
   localToolTimeoutMs: number;
   helloTimeoutMs?: number;
+  /** Intervalo do ping. Sem pong até o ping seguinte, a conexão é derrubada. */
+  heartbeatIntervalMs?: number;
   createSession(client: ConnectedClient, recovery: LiveRecoveryContext | undefined): VoiceSessionHandle;
   onPresentationAbort(): void;
 };
@@ -51,6 +53,28 @@ export function handleConnection(socket: WebSocket, deps: HandlerDeps): void {
   const helloTimer = setTimeout(() => {
     if (!client) socket.close(1008, 'hello timeout');
   }, deps.helloTimeoutMs ?? 10_000);
+
+  // Heartbeat: o Mac dormindo não manda FIN — sem isso a API acharia o cliente
+  // presente por muitos minutos (avisos "falados" pra ninguém, sem push, e a
+  // sessão do Gemini gastando cota). Sem pong até o próximo ping → terminate,
+  // e o 'close' abaixo faz a limpeza normal.
+  let alive = true;
+  socket.on('pong', () => {
+    alive = true;
+  });
+  const heartbeat = setInterval(() => {
+    if (!alive) {
+      logger.warn({ clientId: client?.clientId }, 'ws sem pong — derrubando conexão');
+      socket.terminate();
+      return;
+    }
+    alive = false;
+    try {
+      socket.ping();
+    } catch {
+      /* socket já fechando */
+    }
+  }, deps.heartbeatIntervalMs ?? 15_000);
 
   function onHello(msg: Extract<ApiClientMessage, { type: 'hello' }>): void {
     if (msg.token !== deps.token) {
@@ -155,6 +179,7 @@ export function handleConnection(socket: WebSocket, deps: HandlerDeps): void {
 
   socket.on('close', () => {
     clearTimeout(helloTimer);
+    clearInterval(heartbeat);
     const c = client;
     if (!c) return;
     c.bridge.rejectAll(DISCONNECTED);

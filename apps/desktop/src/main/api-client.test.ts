@@ -157,3 +157,39 @@ describe('ApiClient', () => {
     expect(c.sendText('oi')).toEqual({ ok: false, reason: 'api_offline' });
   });
 });
+
+describe('ApiClient heartbeat', () => {
+  it('derruba e reconecta quando a API não responde ping', async () => {
+    // Servidor que não responde ping (conexão meio-aberta após troca de rede).
+    const mute = new WebSocketServer({ port: 0, autoPong: false });
+    await new Promise<void>((r) => mute.once('listening', () => r()));
+    const mutePort = (mute.address() as AddressInfo).port;
+    const conns: WebSocket[] = [];
+    mute.on('connection', (ws) => {
+      conns.push(ws);
+      ws.send(JSON.stringify({ type: 'hello_ok', clientId: 'desktop-test' }));
+    });
+    const events: RendererEvent[] = [];
+    const c = new ApiClient({
+      apiUrl: `http://127.0.0.1:${mutePort}`,
+      token: 'tok-123456',
+      clientId: 'desktop-test',
+      localOps: [],
+      emit: (e) => events.push(e),
+      runLocalOp: vi.fn(async () => ({ ok: true as const })),
+      reconnectDelaysMs: [10],
+      heartbeatIntervalMs: 50,
+      heartbeatTimeoutMs: 50,
+    });
+    try {
+      c.connect();
+      await until(() => events.some((e) => e.type === 'conn' && e.state === 'open'));
+      await until(() => events.some((e) => e.type === 'conn' && e.state === 'closed'), 3000);
+      await until(() => conns.length >= 2, 3000);
+    } finally {
+      c.close();
+      for (const s of conns) s.terminate();
+      await new Promise<void>((r) => mute.close(() => r()));
+    }
+  });
+});

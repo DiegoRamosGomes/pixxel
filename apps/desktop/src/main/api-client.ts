@@ -26,9 +26,14 @@ export type ApiClientOptions = {
   emit(e: RendererEvent): void;
   runLocalOp(op: LocalOp, args: Record<string, unknown>): Promise<LocalToolResult>;
   reconnectDelaysMs?: number[];
+  /** De quanto em quanto tempo pinga a API e quanto espera o pong. */
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
 };
 
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 20_000];
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 export class ApiClient {
   private ws: WebSocket | null = null;
@@ -38,6 +43,8 @@ export class ApiClient {
   private voiceDesired = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
+  private heartbeat: NodeJS.Timeout | null = null;
+  private pongTimer: NodeJS.Timeout | null = null;
   private readonly delays: number[];
 
   constructor(private readonly opts: ApiClientOptions) {
@@ -53,6 +60,7 @@ export class ApiClient {
     this.ws = ws;
 
     ws.on('open', () => {
+      this.startHeartbeat(ws);
       this.send({
         type: 'hello',
         protocolVersion: PROTOCOL_VERSION,
@@ -85,8 +93,14 @@ export class ApiClient {
       this.onMessage(r.data);
     });
 
+    ws.on('pong', () => {
+      if (this.pongTimer) clearTimeout(this.pongTimer);
+      this.pongTimer = null;
+    });
+
     ws.on('close', (code, reason) => {
       if (this.ws !== ws) return;
+      this.stopHeartbeat();
       this.ws = null;
       this.authed = false;
       this.opts.emit({ type: 'conn', state: 'closed', reason: reason.toString() || `code ${code}` });
@@ -100,6 +114,7 @@ export class ApiClient {
 
   close(): void {
     this.closedByUser = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -223,6 +238,34 @@ export class ApiClient {
 
   private send(msg: ApiClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+  }
+
+  /**
+   * Conexão meio-aberta (troca de rede, servidor sumiu sem FIN) parece "open"
+   * pra sempre. Sem pong no prazo → terminate, que dispara o close e o reconnect.
+   */
+  private startHeartbeat(ws: WebSocket): void {
+    this.stopHeartbeat();
+    const timeoutMs = this.opts.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    this.heartbeat = setInterval(() => {
+      if (this.pongTimer) return; // ainda esperando o pong anterior
+      this.pongTimer = setTimeout(() => {
+        console.warn('[api] sem pong da API — reconectando');
+        ws.terminate();
+      }, timeoutMs);
+      try {
+        ws.ping();
+      } catch {
+        /* socket já fechando */
+      }
+    }, this.opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    if (this.pongTimer) clearTimeout(this.pongTimer);
+    this.heartbeat = null;
+    this.pongTimer = null;
   }
 
   private scheduleReconnect(): void {

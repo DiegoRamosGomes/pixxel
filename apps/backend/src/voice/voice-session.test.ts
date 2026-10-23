@@ -282,4 +282,18 @@ describe('VoiceSession', () => {
     lives[0].emitEmptyTurn();
     expect(lives[0].sent).toEqual(['[evento interno] build terminou']);
   });
+
+  it('enquanto reenvia, o cliente continua vendo a sessão ocupada', async () => {
+    const s = make();
+    s.start();
+    lives[0].emitState({ kind: 'ready' });
+    vi.mocked(sink.state).mockClear();
+    s.sendText('Como está o clima hoje?');
+    lives[0].emitEmptyTurn();
+    lives[0].emitEmptyTurn();
+    expect(sink.state).not.toHaveBeenCalledWith({ kind: 'ready' });
+    await vi.advanceTimersByTimeAsync(1000);
+    lives[0].emitEmptyTurn();
+    expect(sink.state).toHaveBeenCalledWith({ kind: 'ready' });
+  });
 });

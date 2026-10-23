@@ -90,6 +90,8 @@ export class VoiceSession implements VoiceSessionHandle {
    * EMPTY_TURN_RETRY_DELAYS_MS.length vezes.
    */
   private retry: { text: string; attempts: number } | null = null;
+  /** O `ready` do turno vazio que vai ser reenviado não chega ao cliente (orb segue "pensando"). */
+  private hideNextReady = false;
   private lastCurrentWorkStatusAtMs = 0;
   private readonly delays: number[];
 
@@ -226,6 +228,7 @@ export class VoiceSession implements VoiceSessionHandle {
       }
       const delay = EMPTY_TURN_RETRY_DELAYS_MS[retry.attempts];
       retry.attempts += 1;
+      this.hideNextReady = true;
       console.warn(`[voice] turno vazio do Gemini — reenviando (${retry.attempts}): "${retry.text.slice(0, 60)}"`);
       const resend = (): void => {
         if (isCurrent() && this.retry === retry) client!.sendText(retry.text);
@@ -249,6 +252,11 @@ export class VoiceSession implements VoiceSessionHandle {
 
   private onLiveState(client: LiveClientLike, state: GeminiLiveState): void {
     this.state = state.kind;
+    if (state.kind === 'ready' && this.hideNextReady) {
+      this.hideNextReady = false;
+      return;
+    }
+    this.hideNextReady = false;
     this.deps.sink.state(state);
 
     if (state.kind === 'ready') {

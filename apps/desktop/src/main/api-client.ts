@@ -26,6 +26,8 @@ export type ApiClientOptions = {
   emit(e: RendererEvent): void;
   runLocalOp(op: LocalOp, args: Record<string, unknown>): Promise<LocalToolResult>;
   reconnectDelaysMs?: number[];
+  /** A API avisa quando a apresentação começa/termina (o Esc só vale nesse período). */
+  onPresentationState?(running: boolean): void;
   /** De quanto em quanto tempo pinga a API e quanto espera o pong. */
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
@@ -43,6 +45,7 @@ export class ApiClient {
   private voiceDesired = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
+  private presentationRunning = false;
   private heartbeat: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
   private readonly delays: number[];
@@ -101,6 +104,7 @@ export class ApiClient {
     ws.on('close', (code, reason) => {
       if (this.ws !== ws) return;
       this.stopHeartbeat();
+      this.setPresentationRunning(false);
       this.ws = null;
       this.authed = false;
       this.opts.emit({ type: 'conn', state: 'closed', reason: reason.toString() || `code ${code}` });
@@ -223,7 +227,16 @@ export class ApiClient {
       case 'local_tool_call':
         void this.runLocal(msg.callId, msg.name, msg.args);
         return;
+      case 'presentation_state':
+        this.setPresentationRunning(msg.running);
+        return;
     }
+  }
+
+  private setPresentationRunning(running: boolean): void {
+    if (this.presentationRunning === running) return;
+    this.presentationRunning = running;
+    this.opts.onPresentationState?.(running);
   }
 
   private async runLocal(callId: string, op: LocalOp, args: Record<string, unknown>): Promise<void> {

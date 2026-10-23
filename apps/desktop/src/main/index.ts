@@ -110,13 +110,6 @@ app.whenReady().then(() => {
     systemPreferences.isTrustedAccessibilityClient(true);
   }
 
-  // Esc global = aborta apresentação em curso na API (que ignora se não houver).
-  try {
-    globalShortcut.register('Escape', () => api?.abortPresentation());
-  } catch (err) {
-    console.warn('[shortcut] Esc register falhou:', err);
-  }
-
   // Barra lateral: métricas da máquina local.
   shutdownHandlers.push(
     startSystemMetrics((m) => {
@@ -150,6 +143,19 @@ app.whenReady().then(() => {
     localOps: supportedLocalOps(),
     emit,
     runLocalOp: (op, args) => executeLocalOp(op, args, { emit, setActiveProject }),
+    // Esc global só enquanto a apresentação roda: atalho global engole a tecla
+    // em todos os apps (no macOS principalmente).
+    onPresentationState: (running) => {
+      if (!running) {
+        globalShortcut.unregister('Escape');
+        return;
+      }
+      try {
+        globalShortcut.register('Escape', () => api?.abortPresentation());
+      } catch (err) {
+        console.warn('[shortcut] Esc register falhou:', err);
+      }
+    },
   });
   api.connect();
 

@@ -20,6 +20,8 @@ import { toolsForClient } from './voice/tool-catalog.js';
 import { createToolExecutor } from './voice/tool-executor.js';
 import {
   cancelPresentation,
+  isMouseKeyboardTestRunning,
+  isPresentationRunning,
   runMouseKeyboardTest,
   runPresentation,
   type PresentationCtx,
@@ -63,6 +65,13 @@ function createSession(client: ConnectedClient, recovery: LiveRecoveryContext | 
     dismissWidget: (id) => client.send({ type: 'widget_dismiss', id }),
   };
 
+  // Avisa o cliente enquanto um demo roda — é quando o Esc dele cancela.
+  const runDemo = (run: () => Promise<unknown>): void => {
+    if (isPresentationRunning() || isMouseKeyboardTestRunning()) return;
+    client.send({ type: 'presentation_state', running: true });
+    void run().finally(() => client.send({ type: 'presentation_state', running: false }));
+  };
+
   const executeTool = createToolExecutor({
     localOps: client.localOps,
     local,
@@ -77,8 +86,8 @@ function createSession(client: ConnectedClient, recovery: LiveRecoveryContext | 
     serverSnapshot: getSystemSnapshot,
     serverStorage: getStorageStatus,
     presentation: {
-      start: () => void runPresentation(presentationCtx),
-      startMouseKeyboardTest: () => void runMouseKeyboardTest(presentationCtx),
+      start: () => runDemo(() => runPresentation(presentationCtx)),
+      startMouseKeyboardTest: () => runDemo(() => runMouseKeyboardTest(presentationCtx)),
     },
     markBriefingDone: markBriefingDoneToday,
   });

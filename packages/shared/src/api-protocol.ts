@@ -88,6 +88,8 @@ export const ApiServerMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('transcript'), role: z.enum(['user', 'model']), text: z.string() }),
   z.object({ type: z.literal('widget'), id: z.string(), widget: WidgetSchema, ttlMs: z.number() }),
   z.object({ type: z.literal('widget_dismiss'), id: z.string() }),
+  // Apresentação/teste de mouse rodando: o cliente arma o Esc pra cancelar.
+  z.object({ type: z.literal('presentation_state'), running: z.boolean() }),
   z.object({
     type: z.literal('local_tool_call'),
     callId: z.string(),

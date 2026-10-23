@@ -46,3 +46,10 @@ describe('protocolo API → cliente', () => {
     ).toBe(false);
   });
 });
+
+describe('estado da apresentação', () => {
+  it('API avisa o cliente quando a apresentação começa e termina', () => {
+    expect(ApiServerMessageSchema.safeParse({ type: 'presentation_state', running: true }).success).toBe(true);
+    expect(ApiServerMessageSchema.safeParse({ type: 'presentation_state' }).success).toBe(false);
+  });
+});

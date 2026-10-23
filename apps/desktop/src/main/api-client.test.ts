@@ -193,3 +193,19 @@ describe('ApiClient heartbeat', () => {
     }
   });
 });
+
+describe('ApiClient apresentação', () => {
+  it('repassa presentation_state e desliga ao cair a conexão', async () => {
+    const states: boolean[] = [];
+    const { c } = make({ onPresentationState: (running) => states.push(running) });
+    c.connect();
+    await until(() => received.length > 0);
+    helloOk(sockets[0]);
+    sockets[0].send(JSON.stringify({ type: 'presentation_state', running: true }));
+    await until(() => states.length === 1);
+    expect(states).toEqual([true]);
+    sockets[0].close();
+    await until(() => states.length === 2);
+    expect(states).toEqual([true, false]);
+  });
+});

@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { getStorageStatus, getSystemSnapshot } from '@assistant/metrics';
 import { logger } from './logger.js';
+import { installProcessGuards } from './process-guards.js';
 import { handleConnection } from './ws/handler.js';
 import { registerExpoWebhook } from './webhooks/expo.js';
 import { registerHttpRoutes } from './http/routes.js';
@@ -34,6 +35,8 @@ import { isFirstBriefingOfDay, markBriefingDoneToday } from './integrations/brie
 import { getStudyPlanStore } from './integrations/study-plans.js';
 import { isNtfyAvailable, sendNtfy } from './integrations/email/notifier.js';
 import { publishInstagramFile } from './integrations/instagram-publish.js';
+
+installProcessGuards(process, logger);
 
 const memory = new MemoryVault();
 await memory.load();

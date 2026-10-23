@@ -25,10 +25,10 @@ import {
   keyPress,
   moveMouse,
   typeText,
-} from './desktop-control.js';
+} from '../local/input-xdotool.js';
 import { buildMorningBriefing } from './briefing.js';
 import { pollClickupNotificationsOnce } from './clickup-notifications.js';
-import { openProject } from './projects.js';
+import { openProject } from '../local/projects.js';
 import { listWorkLogs, readWorkLog } from './work-log-view.js';
 import { isWebSearchAvailable, searchWeb, formatSearchForVoice } from './web-search.js';
 import {
@@ -104,7 +104,7 @@ function deriveStatusForDisplay(e: WorkEntry): string {
   return 'em andamento';
 }
 import { getStorageStatus } from '@assistant/metrics';
-import { restartWifi } from '../wifi.js';
+import { restartWifi } from '../local/wifi.js';
 import {
   backfillEmails,
   findRecentEmail,

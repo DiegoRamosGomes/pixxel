@@ -37,7 +37,7 @@ import {
   mouseUpFast,
   scrollMouseFast,
   stopHandMouse,
-} from './integrations/hand-mouse.js';
+} from './local/hand-mouse.js';
 import {
   indexMemoryEntry,
   indexWorklogFile,
@@ -51,7 +51,7 @@ import { spawn } from 'node:child_process';
 import type { Widget } from '../shared/widgets.js';
 import { MemoryVault, type MemoryType } from './memory.js';
 import { startNetworkPoll, startSystemMetrics, startTopProcesses } from '@assistant/metrics';
-import { startWifiPoll } from './wifi.js';
+import { startWifiPoll } from './local/wifi.js';
 import { startEmailPoller } from './integrations/email/poller.js';
 import {
   backfillEmails,

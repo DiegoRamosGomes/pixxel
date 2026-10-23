@@ -20,7 +20,7 @@ import {
   resetAbort,
   sleep,
   typeText,
-} from './desktop-control.js';
+} from '../local/input-xdotool.js';
 import { searchWeb, formatSearchForVoice } from './web-search.js';
 import { fetchWeather } from './weather.js';
 

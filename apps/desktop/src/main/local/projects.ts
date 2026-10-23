@@ -1,14 +1,14 @@
 // Busca de projetos por nome aproximado e abertura no VSCode.
 //
 // Configuração: env `PROJECTS_ROOTS` com caminhos separados por vírgula.
-// Default: $HOME/Projects.
+// Default: $HOME/Projects e $HOME/projetos (os que existirem).
 //
 // Estratégia: scan depth-2 nos roots, tokeniza nome do projeto e query,
 // pontua por interseção de tokens. Match >= 50% abre direto. Senão devolve
 // alternativas pro Gemini perguntar ao usuário.
 
 import { spawn } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -52,7 +52,8 @@ function getRoots(): string[] {
       .map((s) => s.trim())
       .filter(Boolean);
   }
-  return [join(homedir(), 'Projects')];
+  // Linux usa ~/Projects; no Mac do Diego os projetos ficam em ~/projetos.
+  return [join(homedir(), 'Projects'), join(homedir(), 'projetos')].filter((d) => existsSync(d));
 }
 
 function scan(

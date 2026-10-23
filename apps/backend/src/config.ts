@@ -11,6 +11,13 @@ const ConfigSchema = z.object({
   // Secret compartilhado com Expo na criação do webhook (eas webhook:create).
   // Usado pra validar `expo-signature` (HMAC SHA-1) em cada request.
   EXPO_WEBHOOK_SECRET: z.string().optional(),
+  // Pasta de dados (memória, planos, estado). Sem valor: ~/pixxel.
+  PIXXEL_DATA_DIR: z.string().optional(),
+  // Gemini Live roda na API. Sem chave, a voz fica indisponível pros clientes.
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_LIVE_MODEL: z.string().optional(),
+  // Quanto a API espera o cliente responder uma função local.
+  LOCAL_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 });
 
 export const config = ConfigSchema.parse(process.env);

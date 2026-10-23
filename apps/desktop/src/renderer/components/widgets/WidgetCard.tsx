@@ -75,5 +75,8 @@ function renderInner(widget: Widget) {
       return <TrelloCardsListCard data={widget} />;
     case 'trello-card-detail':
       return <TrelloCardDetailCard data={widget} />;
+    case 'briefing':
+      // O palco não é card flutuante.
+      return null;
   }
 }

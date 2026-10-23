@@ -153,4 +153,44 @@ export type Widget =
   | NotificationsWidget
   | BuildStatusWidget
   | TrelloCardsListWidget
-  | TrelloCardDetailWidget;
+  | TrelloCardDetailWidget
+  | BriefingWidget;
+
+export type NewsArea = 'mundo' | 'tecnologia' | 'economia';
+
+export type BriefingSegment =
+  | {
+      kind: 'date';
+      say: string;
+      cue: string;
+      weekday: string;
+      day: number;
+      monthYear: string;
+      observance?: { name: string; type: 'holiday' | 'observance' };
+    }
+  | {
+      kind: 'weather';
+      say: string;
+      cue: string;
+      place: string;
+      tempC: number;
+      condition: string;
+      weatherCode?: number;
+      minC?: number;
+      maxC?: number;
+      rainPercent?: number;
+    }
+  | {
+      kind: 'news';
+      say: string;
+      cue: string;
+      area: NewsArea;
+      title: string;
+      summary: string;
+      url: string;
+      imageUrl?: string;
+      source: string;
+      publishedAt: string;
+    };
+
+export type BriefingWidget = { kind: 'briefing'; segments: BriefingSegment[] };

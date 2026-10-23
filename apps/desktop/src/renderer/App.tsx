@@ -6,6 +6,7 @@ import type {
 } from '../shared/ipc.js';
 import type { Widget } from '../shared/widgets.js';
 import { Orb, type OrbState } from './components/Orb.js';
+import { nextAwaiting } from './awaiting.js';
 import { WidgetCard } from './components/widgets/WidgetCard.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import { MemoryGraphPanel } from './components/MemoryGraphPanel.js';
@@ -99,6 +100,7 @@ export function App() {
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
+      setAwaitingResponse((prev) => nextAwaiting(prev, event));
       switch (event.type) {
         case 'conn':
           setConn({ state: event.state, reason: event.reason });

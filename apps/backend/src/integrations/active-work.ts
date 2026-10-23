@@ -2,8 +2,7 @@
 // ~/pixxel/active-work.json. Cada entrada tem início, fim opcional, descrição
 // e (opcional) link com tarefa do ClickUp.
 //
-// Usado pelo Gemini Live via tools start_work/end_work/current_work, e pelo
-// briefing matinal pra sugerir continuar a tarefa que ficou aberta.
+// Usado pelo Gemini Live via tools start_work/end_work/current_work.
 
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -150,15 +149,6 @@ class ActiveWorkStore {
         return new Date(e.endedAt).getTime() >= cutoff;
       })
       .reverse();
-  }
-
-  /** Última sessão aberta com startedAt nos últimos N dias. */
-  lastUnfinished(days = 7): WorkEntry | null {
-    const cur = this.current();
-    if (!cur) return null;
-    const cutoff = Date.now() - days * 86_400_000;
-    if (new Date(cur.startedAt).getTime() < cutoff) return null;
-    return cur;
   }
 
   async startWork(input: {

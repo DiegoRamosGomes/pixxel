@@ -91,20 +91,10 @@ export async function getUserId(): Promise<number | null> {
 }
 
 const IN_PROGRESS_KEYWORDS = ['progress', 'desenvolv', 'doing', 'andamento'];
-const TODO_KEYWORDS = ['to do', 'todo', 'open', 'pendente', 'aberto', 'backlog', 'a fazer'];
 
 function isInProgress(task: ClickupTask): boolean {
   const status = task.status?.status?.toLowerCase() ?? '';
   return IN_PROGRESS_KEYWORDS.some((k) => status.includes(k));
-}
-
-function isTodo(task: ClickupTask): boolean {
-  const status = task.status?.status?.toLowerCase() ?? '';
-  // Inclui qualquer "aberto/pendente/backlog" mas exclui in-progress (que tem
-  // sua própria categoria) e qualquer status terminal (closed vem filtrado
-  // pela API com include_closed=false).
-  if (isInProgress(task)) return false;
-  return TODO_KEYWORDS.some((k) => status.includes(k));
 }
 
 async function fetchMyTasks(): Promise<ClickupTask[] | null> {
@@ -123,11 +113,6 @@ async function fetchMyTasks(): Promise<ClickupTask[] | null> {
 export async function listMyInProgressTasks(): Promise<ClickupTask[] | null> {
   const tasks = await fetchMyTasks();
   return tasks ? tasks.filter(isInProgress) : null;
-}
-
-export async function listMyTodoTasks(): Promise<ClickupTask[] | null> {
-  const tasks = await fetchMyTasks();
-  return tasks ? tasks.filter(isTodo) : null;
 }
 
 export async function listMyHighPriorityTasks(): Promise<ClickupTask[] | null> {

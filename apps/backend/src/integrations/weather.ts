@@ -1,35 +1,13 @@
-// Clima: ipapi.co (geolocalização) + Open-Meteo (forecast). Ambos free, sem key.
+// Clima sempre de Jaguaruna - SC: a API roda num servidor de casa, então a
+// geolocalização por IP apontaria pro lugar errado. Forecast via Open-Meteo
+// (free, sem key).
 
 import type { WeatherWidget } from '@assistant/shared/widgets';
 
-type Geo = { latitude: number; longitude: number; city: string; country: string };
-
 export type WeatherResult = { text: string; widget?: WeatherWidget };
 
-async function lookupGeo(): Promise<Geo | null> {
-  try {
-    const res = await fetch('https://ipapi.co/json/', {
-      headers: { 'user-agent': 'pixxel-assistant/0.1' },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      latitude?: number;
-      longitude?: number;
-      city?: string;
-      country_name?: string;
-    };
-    if (data.latitude == null || data.longitude == null) return null;
-    return {
-      latitude: data.latitude,
-      longitude: data.longitude,
-      city: data.city ?? 'sua localização',
-      country: data.country_name ?? '',
-    };
-  } catch (err) {
-    console.warn('[weather] ipapi failed:', err);
-    return null;
-  }
-}
+// Coordenadas fixas de Jaguaruna - SC, no fuso de Brasília.
+const HOME = { latitude: -28.62145, longitude: -49.02529, city: 'Jaguaruna' };
 
 const WMO_CODES: Record<number, string> = {
   0: 'céu limpo',
@@ -63,14 +41,11 @@ function describeCode(code: number | undefined): string {
 export async function fetchWeather(
   when: 'today' | 'tomorrow',
 ): Promise<WeatherResult> {
-  const geo = await lookupGeo();
-  if (!geo) return { text: 'Não consegui descobrir sua localização agora.' };
-
   const url =
-    `https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}` +
+    `https://api.open-meteo.com/v1/forecast?latitude=${HOME.latitude}&longitude=${HOME.longitude}` +
     `&current=temperature_2m,weather_code,relative_humidity_2m` +
     `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
-    `&timezone=auto&forecast_days=2`;
+    `&timezone=America/Sao_Paulo&forecast_days=2`;
 
   let res: Response;
   try {
@@ -99,7 +74,7 @@ export async function fetchWeather(
     const rain = data.daily?.precipitation_probability_max?.[0];
     if (t == null || code == null) return { text: 'Sem dados de clima agora.' };
     const condition = describeCode(code);
-    let text = `Em ${geo.city} estão ${Math.round(t)}°C, ${condition}.`;
+    let text = `Em ${HOME.city} estão ${Math.round(t)}°C, ${condition}.`;
     if (min != null && max != null) {
       text += ` Mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
     }
@@ -109,8 +84,7 @@ export async function fetchWeather(
       widget: {
         kind: 'weather',
         when: 'today',
-        city: geo.city,
-        country: geo.country,
+        city: HOME.city,
         tempC: t,
         weatherCode: code,
         condition,
@@ -128,15 +102,14 @@ export async function fetchWeather(
   const rain = data.daily?.precipitation_probability_max?.[1];
   if (code == null || max == null || min == null) return { text: 'Sem previsão pra amanhã.' };
   const condition = describeCode(code);
-  let text = `Amanhã em ${geo.city}: ${condition}, mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
+  let text = `Amanhã em ${HOME.city}: ${condition}, mínima de ${Math.round(min)}°C e máxima de ${Math.round(max)}°C.`;
   if (rain != null && rain >= 30) text += ` ${rain}% de chance de chuva.`;
   return {
     text,
     widget: {
       kind: 'weather',
       when: 'tomorrow',
-      city: geo.city,
-      country: geo.country,
+      city: HOME.city,
       weatherCode: code,
       condition,
       minC: min,

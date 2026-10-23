@@ -53,6 +53,8 @@ export type AssistantApi = {
     nodes: Array<{ id: string; label: string; type: 'user' | 'feedback' | 'project' | 'reference' | 'hub'; description?: string }>;
     edges: Array<{ source: string; target: string; kind: 'link' | 'type' }>;
   }>;
+  /** Abre uma URL https no navegador padrão. Outros esquemas são recusados pelo main. */
+  openExternal: (url: string) => Promise<{ ok: boolean; reason?: string }>;
   /** Renderer manda o frame da câmera (data URL JPEG) ou null se falhou/sem stream. */
   cameraFrame: (requestId: string, dataUrl: string | null) => void;
   /** Hand-mouse: liga/desliga o tracking. Retorna ok=false se xdotool não tá disponível. */

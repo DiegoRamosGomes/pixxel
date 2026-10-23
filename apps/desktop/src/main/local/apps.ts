@@ -27,6 +27,15 @@ export async function openApp(name: string): Promise<LocalToolResult> {
   });
 }
 
+// Só https: a janela pode mandar abrir no navegador (matérias, links de notícia).
+export function isSafeExternalUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export async function openUrl(url: string): Promise<LocalToolResult> {
   if (!/^https?:\/\//i.test(url)) return { ok: false, reason: 'URL inválida.' };
   try {

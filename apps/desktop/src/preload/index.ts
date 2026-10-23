@@ -11,6 +11,7 @@ const api: AssistantApi = {
   windowMinimize: () => ipcRenderer.send('assistant:window-minimize'),
   windowMaximizeToggle: () => ipcRenderer.send('assistant:window-maximize-toggle'),
   memoryGraph: () => ipcRenderer.invoke('assistant:memory-graph'),
+  openExternal: (url) => ipcRenderer.invoke('assistant:open-external', url),
   cameraFrame: (requestId, dataUrl) =>
     ipcRenderer.send('assistant:camera-frame', requestId, dataUrl),
   handMouseEnable: () => ipcRenderer.invoke('assistant:hand-mouse-enable'),

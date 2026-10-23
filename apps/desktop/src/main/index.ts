@@ -9,6 +9,7 @@ import { ApiClient } from './api-client.js';
 import { executeLocalOp, supportedLocalOps } from './local/index.js';
 import { deliverFrame } from './local/camera.js';
 import { startWifiPoll } from './local/wifi.js';
+import { isSafeExternalUrl, openUrl } from './local/apps.js';
 import {
   handMouseAvailable,
   getScreenSize as getHandMouseScreenSize,
@@ -171,6 +172,10 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('assistant:memory-graph', () => api?.memoryGraph() ?? { nodes: [], edges: [] });
+
+  ipcMain.handle('assistant:open-external', (_event, url: string) =>
+    isSafeExternalUrl(url) ? openUrl(url) : { ok: false, reason: 'URL não permitida.' },
+  );
 
   ipcMain.on('assistant:camera-frame', (_event, requestId: string, dataUrl: string | null) => {
     deliverFrame(requestId, dataUrl);

@@ -53,9 +53,6 @@ const stmts = {
   markDelivered: db.prepare(
     `UPDATE webhook_events SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL`,
   ),
-  incrementRetry: db.prepare(
-    `UPDATE webhook_events SET retry_count = retry_count + 1 WHERE id = ?`,
-  ),
   // Limpeza opcional: eventos entregues há mais de N dias podem ser purgados.
   purgeOldDelivered: db.prepare(
     `DELETE FROM webhook_events WHERE delivered_at IS NOT NULL AND delivered_at < ?`,
@@ -83,10 +80,6 @@ export function listPendingWebhookEvents(): WebhookEventRow[] {
 
 export function markWebhookDelivered(id: string): void {
   stmts.markDelivered.run(Date.now(), id);
-}
-
-export function incrementWebhookRetry(id: string): void {
-  stmts.incrementRetry.run(id);
 }
 
 /** Limpa eventos entregues há mais de `daysAgo` dias. Chamar periodicamente. */

@@ -28,8 +28,7 @@ type FastifyApp = {
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { insertWebhookEvent, listPendingWebhookEvents } from '../memory/db.js';
-import { tryDeliverToAll } from '../ws/hub.js';
+import { insertWebhookEvent, listPendingWebhookEvents, type WebhookEventRow } from '../memory/db.js';
 
 type ExpoBuildPayload = {
   status?: string; // 'started' | 'finished' | 'errored' | 'canceled'
@@ -93,7 +92,10 @@ function normalizeForRenderer(payload: ExpoBuildPayload): Record<string, unknown
   };
 }
 
-export function registerExpoWebhook(app: FastifyApp): void {
+export function registerExpoWebhook(
+  app: FastifyApp,
+  onEvent: (row: WebhookEventRow) => void,
+): void {
   // Content-type parser que preserva o body cru pra HMAC. Sem isso, o Fastify
   // só entrega `req.body` parseado e perdemos o byte-exact necessário.
   app.addContentTypeParser(
@@ -143,10 +145,9 @@ export function registerExpoWebhook(app: FastifyApp): void {
         'expo webhook persisted',
       );
 
-      // Tenta entregar imediatamente — se nenhum cliente, fica na fila.
-      const pending = listPendingWebhookEvents();
-      const row = pending.find((p) => p.id === eventId);
-      if (row) tryDeliverToAll(row);
+      // Avisos decidem: widget, fala (ou fila até uma voz ficar pronta) e push.
+      const row = listPendingWebhookEvents().find((p) => p.id === eventId);
+      if (row) onEvent(row);
 
       return reply.code(200).send({ ok: true, id: eventId });
     },

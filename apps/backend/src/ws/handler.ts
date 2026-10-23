@@ -1,88 +1,173 @@
-// Conexão WS pro desktop. Apenas auth (hello + token) + webhook_ack.
-// Sem chat/dispatcher — esse backend é só hub de webhooks agora.
+// Conexão WebSocket de um cliente (desktop, celular) com a API.
+//
+// Primeira mensagem tem que ser `hello` (token + operações locais que o
+// cliente sabe fazer). Depois disso: controle da sessão de voz em JSON,
+// áudio do microfone em frames binários e respostas das funções locais.
 
 import type { WebSocket } from '@fastify/websocket';
-import { ClientEventSchema, type ServerEvent } from '@assistant/shared';
-import { config } from '../config.js';
-import { logger } from '../logger.js';
 import {
-  registerClient,
-  unregisterClient,
-  drainPendingToClient,
-  ackWebhookEvent,
-} from './hub.js';
+  ApiClientMessageSchema,
+  PROTOCOL_VERSION,
+  type ApiClientMessage,
+  type ApiServerMessage,
+} from '@assistant/shared';
+import { logger } from '../logger.js';
+import { LocalBridge } from '../clients/local-bridge.js';
+import type {
+  ClientRegistry,
+  ConnectedClient,
+  LiveRecoveryContext,
+  VoiceSessionHandle,
+} from '../clients/client-registry.js';
 
-function send(socket: WebSocket, event: ServerEvent): void {
-  socket.send(JSON.stringify(event));
+export type HandlerDeps = {
+  token: string;
+  registry: ClientRegistry;
+  localToolTimeoutMs: number;
+  helloTimeoutMs?: number;
+  createSession(client: ConnectedClient, recovery: LiveRecoveryContext | undefined): VoiceSessionHandle;
+  onPresentationAbort(): void;
+};
+
+const DISCONNECTED = 'O dispositivo desconectou.';
+
+function buildExplainTaskText(taskId: string): string {
+  return (
+    `[evento interno — não é fala do usuário] Usuário clicou na notificação ` +
+    `da task ${taskId}. Use a tool clickup_explain_task com taskId="${taskId}" ` +
+    `e fale sobre a task de forma natural.`
+  );
 }
 
-export function handleConnection(socket: WebSocket): void {
-  let authed = false;
-  logger.info('ws client connected');
+export function handleConnection(socket: WebSocket, deps: HandlerDeps): void {
+  let client: ConnectedClient | null = null;
 
-  socket.on('message', (raw: Buffer) => {
+  const send = (msg: ApiServerMessage): void => {
+    if (socket.readyState !== socket.OPEN) return;
+    socket.send(JSON.stringify(msg));
+  };
+  const fail = (code: string, message: string): void => send({ type: 'error', code, message });
+
+  const helloTimer = setTimeout(() => {
+    if (!client) socket.close(1008, 'hello timeout');
+  }, deps.helloTimeoutMs ?? 10_000);
+
+  function onHello(msg: Extract<ApiClientMessage, { type: 'hello' }>): void {
+    if (msg.token !== deps.token) {
+      fail('unauthorized', 'bad token');
+      socket.close(1008, 'unauthorized');
+      return;
+    }
+    if (msg.protocolVersion !== PROTOCOL_VERSION) {
+      fail('protocol_mismatch', `esperado protocolo ${PROTOCOL_VERSION}`);
+      socket.close(1008, 'protocol mismatch');
+      return;
+    }
+    clearTimeout(helloTimer);
+    const now = Date.now();
+    const c: ConnectedClient = {
+      clientId: msg.clientId,
+      kind: msg.clientKind,
+      localOps: msg.localOps,
+      send,
+      sendAudio: (pcm) => {
+        if (socket.readyState === socket.OPEN) socket.send(pcm, { binary: true });
+      },
+      close: (code, reason) => socket.close(code, reason),
+      bridge: new LocalBridge(send, deps.localToolTimeoutMs),
+      session: null,
+      lastInteractionAt: now,
+      connectedAt: now,
+    };
+    const prev = deps.registry.add(c);
+    if (prev) {
+      // Mesmo dispositivo reconectou com a conexão antiga ainda aberta
+      // (Mac acordou do sleep): a antiga sai e a voz dela vira contexto de retomada.
+      prev.bridge.rejectAll(DISCONNECTED);
+      const recovery = prev.session?.detach();
+      if (recovery) deps.registry.saveRecovery(prev.clientId, recovery);
+      prev.session = null;
+      prev.close(1000, 'replaced');
+    }
+    client = c;
+    send({ type: 'hello_ok', clientId: c.clientId });
+    logger.info({ clientId: c.clientId, kind: c.kind, localOps: c.localOps }, 'ws client authed');
+  }
+
+  function onMessage(c: ConnectedClient, msg: ApiClientMessage): void {
+    switch (msg.type) {
+      case 'hello':
+        fail('already_authed', 'hello já recebido');
+        return;
+      case 'voice_start':
+        if (!c.session) c.session = deps.createSession(c, deps.registry.takeRecovery(c.clientId));
+        c.session.start();
+        return;
+      case 'voice_stop':
+        c.session?.stop();
+        return;
+      case 'voice_text':
+        if (!c.session?.sendText(msg.text)) fail('voice_not_ready', 'sessão de voz não está pronta');
+        return;
+      case 'voice_end_turn':
+        c.session?.endTurn();
+        return;
+      case 'local_tool_result':
+        c.bridge.resolve(msg.callId, msg.result);
+        return;
+      case 'explain_clickup_task': {
+        const taskId = msg.taskId.replace(/[^A-Za-z0-9-]/g, '');
+        if (taskId) c.session?.sendInternal(buildExplainTaskText(taskId));
+        return;
+      }
+      case 'presentation_abort':
+        deps.onPresentationAbort();
+        return;
+    }
+  }
+
+  socket.on('message', (raw: Buffer, isBinary: boolean) => {
+    if (isBinary) {
+      // Áudio do microfone. Antes do hello é ignorado.
+      client?.session?.sendAudio(raw);
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw.toString());
     } catch {
-      send(socket, { type: 'error', code: 'invalid_json', message: 'invalid json' });
+      fail('invalid_json', 'invalid json');
       return;
     }
-
-    const result = ClientEventSchema.safeParse(parsed);
+    const result = ApiClientMessageSchema.safeParse(parsed);
     if (!result.success) {
-      send(socket, {
-        type: 'error',
-        code: 'invalid_event',
-        message: result.error.message,
-      });
+      fail('invalid_message', result.error.message);
       return;
     }
-    const event = result.data;
-
-    if (event.type === 'hello') {
-      if (event.token !== config.CLIENT_TOKEN) {
-        send(socket, { type: 'error', code: 'unauthorized', message: 'bad token' });
-        socket.close(1008, 'unauthorized');
-        return;
-      }
-      authed = true;
-      send(socket, { type: 'hello_ok', sessionId: event.sessionId });
-      logger.info({ sessionId: event.sessionId }, 'ws authed');
-      registerClient(socket);
-      // Drena pendentes assíncrono pra não bloquear o hello_ok.
-      setImmediate(() => drainPendingToClient(socket));
+    const msg = result.data;
+    if (!client) {
+      if (msg.type === 'hello') onHello(msg);
+      else fail('unauthorized', 'send hello first');
       return;
     }
-
-    if (!authed) {
-      send(socket, { type: 'error', code: 'unauthorized', message: 'send hello first' });
-      return;
-    }
-
-    if (event.type === 'webhook_ack') {
-      ackWebhookEvent(event.eventId);
-      return;
-    }
-
-    // user_message: removido da nova arquitetura. Backend não fala mais com LLM.
-    if (event.type === 'user_message') {
-      send(socket, {
-        type: 'error',
-        code: 'unsupported',
-        message: 'user_message não é mais suportado neste backend',
-      });
-      return;
-    }
+    onMessage(client, msg);
   });
 
   socket.on('close', () => {
-    logger.info('ws client disconnected');
-    unregisterClient(socket);
+    clearTimeout(helloTimer);
+    const c = client;
+    if (!c) return;
+    c.bridge.rejectAll(DISCONNECTED);
+    // Substituído por uma conexão nova do mesmo clientId: quem substituiu já
+    // guardou o contexto e o registro aponta pra conexão nova.
+    if (deps.registry.get(c.clientId) !== c) return;
+    const recovery = c.session?.detach();
+    if (recovery) deps.registry.saveRecovery(c.clientId, recovery);
+    deps.registry.remove(c.clientId, c);
+    logger.info({ clientId: c.clientId }, 'ws client disconnected');
   });
 
   socket.on('error', (err: Error) => {
     logger.warn({ err }, 'ws error');
-    unregisterClient(socket);
   });
 }

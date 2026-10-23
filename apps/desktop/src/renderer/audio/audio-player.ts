@@ -4,12 +4,18 @@
 export class PcmStreamPlayer {
   private ctx: AudioContext | null = null;
   private nextStart = 0;
+  // Fontes agendadas que ainda não terminaram (pra poder cortar na interrupção).
+  private sources: AudioBufferSourceNode[] = [];
 
-  constructor(private readonly sampleRate: number) {}
+  constructor(
+    private readonly sampleRate: number,
+    private readonly createContext: (sampleRate: number) => AudioContext = (rate) =>
+      new AudioContext({ sampleRate: rate }),
+  ) {}
 
   private ensureContext(): AudioContext {
     if (!this.ctx) {
-      this.ctx = new AudioContext({ sampleRate: this.sampleRate });
+      this.ctx = this.createContext(this.sampleRate);
     }
     return this.ctx;
   }
@@ -36,10 +42,34 @@ export class PcmStreamPlayer {
     src.buffer = buf;
     src.connect(ctx.destination);
 
+    this.sources.push(src);
+    src.onended = () => {
+      this.sources = this.sources.filter((s) => s !== src);
+    };
+
     const now = ctx.currentTime;
     const start = Math.max(now, this.nextStart);
     src.start(start);
     this.nextStart = start + buf.duration;
+  }
+
+  /** Áudio ainda na fila (agendado e não tocado), em ms. 0 sem contexto. */
+  backlogMs(): number {
+    if (!this.ctx) return 0;
+    return Math.max(0, (this.nextStart - this.ctx.currentTime) * 1000);
+  }
+
+  /** Para as fontes já agendadas e zera a fila — usado na interrupção. */
+  stopAll(): void {
+    for (const src of this.sources) {
+      try {
+        src.stop();
+      } catch {
+        /* já parou */
+      }
+    }
+    this.sources = [];
+    if (this.ctx) this.nextStart = this.ctx.currentTime;
   }
 
   /** Limpa o backlog — útil quando o usuário interrompe ou troca de turno. */
@@ -57,6 +87,7 @@ export class PcmStreamPlayer {
       }
       this.ctx = null;
     }
+    this.sources = [];
     this.nextStart = 0;
   }
 }

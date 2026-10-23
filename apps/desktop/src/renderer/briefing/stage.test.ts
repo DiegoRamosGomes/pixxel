@@ -61,6 +61,23 @@ describe('stageReducer', () => {
     expect(s.active).toBe(4);
   });
 
+  it('rede de segurança mostra o card do meio cuja deixa falhou', () => {
+    let s = open(0);
+    // Só a deixa do segmento 2 foi ouvida; a do 1 se perdeu.
+    s = stageReducer(s, { type: 'model_text', text: 'na economia o', now: 0, backlogMs: 20000 })!;
+    const fb = fallbackMs(widget.segments[0].say);
+    s = stageReducer(s, { type: 'tick', now: fb - 1 })!;
+    expect(s.active).toBe(0);
+    s = stageReducer(s, { type: 'tick', now: fb })!;
+    expect(s.active).toBe(1);
+    // A rede não passa da troca agendada.
+    s = stageReducer(s, { type: 'tick', now: fb + fallbackMs(widget.segments[1].say) })!;
+    expect(s.active).toBe(1);
+    s = stageReducer(s, { type: 'tick', now: 20000 })!;
+    expect(s.active).toBe(2);
+    expect(s.pending).toEqual([]);
+  });
+
   it('duas deixas na mesma janela não pulam cartão', () => {
     let s = open();
     s = stageReducer(s, { type: 'model_text', text: 'o tempo em', now: 0, backlogMs: 3000 })!;
@@ -118,9 +135,13 @@ describe('stageReducer', () => {
     expect(fallbackMs('a'.repeat(1000))).toBe(15000);
   });
 
-  it('turn_end sem fala não agenda fechamento', () => {
-    const s = stageReducer(open(), { type: 'turn_end', now: 0, backlogMs: 0 })!;
-    expect(s.closeAt).toBeNull();
+  it('turn_end sem palco aberto não faz nada', () => {
+    expect(stageReducer(null, { type: 'turn_end', now: 0, backlogMs: 0 })).toBeNull();
+  });
+
+  it('palco nasce falando: turn_end sem model_text nem speaking arma closeAt', () => {
+    const s = stageReducer(open(), { type: 'turn_end', now: 10, backlogMs: 500 })!;
+    expect(s.closeAt).toBe(10 + 500 + STAGE_LINGER_MS);
   });
 
   it('turn_end depois de falar fecha após fila + permanência', () => {
@@ -156,6 +177,13 @@ describe('toStageEvent', () => {
     expect(toStageEvent(closed, 0, 0, 'speaking')).toEqual({ type: 'close' });
     const idle = { type: 'live_state', state: { kind: 'idle' } } satisfies RendererEvent;
     expect(toStageEvent(idle, 0, 0, '')).toEqual({ type: 'close' });
+  });
+
+  it('conexão com a API caiu fecha o palco', () => {
+    expect(toStageEvent({ type: 'conn', state: 'closed', reason: 'x' }, 0, 0, 'speaking')).toEqual({ type: 'close' });
+    expect(toStageEvent({ type: 'conn', state: 'error', reason: 'x' }, 0, 0, 'speaking')).toEqual({ type: 'close' });
+    expect(toStageEvent({ type: 'conn', state: 'connecting' }, 0, 0, 'speaking')).toBeNull();
+    expect(toStageEvent({ type: 'conn', state: 'open' }, 0, 0, 'speaking')).toBeNull();
   });
 
   it('mapeia widget briefing, texto do modelo, speaking e interrupção', () => {

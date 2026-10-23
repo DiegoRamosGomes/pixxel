@@ -52,7 +52,9 @@ export function stageReducer(s: StageState | null, e: StageEvent): StageState | 
       pending: [],
       activeSince: e.now,
       openedAt: e.now,
-      sawSpeaking: false,
+      // O palco abre no primeiro chunk de áudio (o widget sai junto com a
+      // fala), então já nasce falando: o 'speaking' chega antes do widget.
+      sawSpeaking: true,
       finalAt: null,
       final: false,
       closeAt: null,
@@ -98,8 +100,9 @@ export function stageReducer(s: StageState | null, e: StageEvent): StageState | 
           pending: s.pending.filter((p) => e.now < p.at),
         };
       } else if (
-        s.pending.length === 0 &&
-        s.active + 1 < s.segments.length &&
+        // Com troca agendada, a rede só anda até o card antes dela: um card do
+        // meio cuja deixa falhou aparece atrasado em vez de nunca aparecer.
+        s.active + 1 < Math.min(s.segments.length, ...s.pending.map((p) => p.index)) &&
         e.now - s.activeSince >= fallbackMs(s.segments[s.active].say)
       ) {
         next = { ...next, active: s.active + 1, activeSince: e.now };
@@ -135,6 +138,9 @@ export function toStageEvent(
       return null;
     case 'live_interrupted':
       return { type: 'interrupt' };
+    case 'conn':
+      // Caiu a conexão com a API: a fala não vai continuar.
+      return e.state === 'closed' || e.state === 'error' ? { type: 'close' } : null;
     default:
       return null;
   }

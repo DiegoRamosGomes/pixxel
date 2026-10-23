@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeSpeech } from '@assistant/shared/briefing-cues';
 import { composeBriefing, type BriefingInput } from './briefing-compose.js';
 import type { NewsItem } from './news.js';
 
@@ -61,6 +62,15 @@ describe('composeBriefing', () => {
     const { segments } = composeBriefing(base).widget;
     expect(new Set(segments.map((s) => s.cue)).size).toBe(segments.length);
     expect(segments[0].cue).toBe('hoje e sexta feira');
+  });
+
+  it('deixa de cada trecho não aparece na fala dos trechos anteriores', () => {
+    const { segments } = composeBriefing(base).widget;
+    segments.forEach((s, i) => {
+      const before = normalizeSpeech(segments.slice(0, i).map((p) => p.say).join(' '));
+      expect(s.cue).not.toBe('');
+      expect((' ' + before + ' ').includes(' ' + s.cue + ' ')).toBe(false);
+    });
   });
 
   it('feriado: marca o card e inclui a linha na fala', () => {

@@ -58,6 +58,13 @@ describe('PcmStreamPlayer', () => {
     expect(sources.map((s) => s.stopped)).toEqual([0, 1]);
   });
 
+  it('backlogMs soma a latência de saída', () => {
+    const { ctx } = fakeContext();
+    const player = new PcmStreamPlayer(24000, () => Object.assign(ctx, { outputLatency: 0.2 }) as unknown as AudioContext);
+    player.enqueue(halfSecond());
+    expect(player.backlogMs()).toBe(700);
+  });
+
   it('backlogMs é 0 sem contexto', () => {
     expect(new PcmStreamPlayer(24000).backlogMs()).toBe(0);
   });

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { cueHeard } from '@assistant/shared/briefing-cues';
 import type {
   ConnState,
   LiveState,
@@ -104,6 +103,14 @@ export function App() {
   // pra reconhecer o fim do turno (speaking → ready).
   const [stage, dispatchStage] = useReducer(stageReducer, null);
   const prevLiveKindRef = useRef<string>('idle');
+  // Medição da sincronia do palco (só no dev): quanto a transcrição corre à
+  // frente do áudio. Fica aqui, fora do StageState, porque só serve ao log.
+  const stageSyncRef = useRef<{
+    /** Texto do modelo recente, pela hora da troca que ele agendaria (now + backlog). */
+    textByAt: Map<number, { now: number; backlogMs: number }>;
+    /** Quando a deixa de cada segmento foi ouvida (now do texto que agendou a troca). */
+    heardAt: Map<number, number>;
+  }>({ textByAt: new Map(), heardAt: new Map() });
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
@@ -117,6 +124,20 @@ export function App() {
         prevLiveKindRef.current,
       );
       if (event.type === 'live_state') prevLiveKindRef.current = event.state.kind;
+      if (import.meta.env.DEV && stageEvent) {
+        const sync = stageSyncRef.current;
+        if (stageEvent.type === 'open') {
+          sync.textByAt.clear();
+          sync.heardAt.clear();
+        } else if (stageEvent.type === 'model_text') {
+          sync.textByAt.set(stageEvent.now + stageEvent.backlogMs, {
+            now: stageEvent.now,
+            backlogMs: stageEvent.backlogMs,
+          });
+          // Só os mais recentes interessam: a troca entra na fila logo depois.
+          if (sync.textByAt.size > 32) sync.textByAt.delete(sync.textByAt.keys().next().value!);
+        }
+      }
       if (stageEvent) dispatchStage(stageEvent);
       switch (event.type) {
         case 'conn':
@@ -289,17 +310,35 @@ export function App() {
     return () => window.clearInterval(id);
   }, [stageOpen]);
 
-  // Medição pedida no spec: a cada troca de card, se veio da deixa ou da rede
-  // de segurança e quanto áudio ainda está na fila do player. Só no dev.
-  // Roda só quando o índice muda; o `stage` lido é o da mesma renderização.
+  // Medição pedida no spec, só no dev. Quando uma deixa entra na fila: quanto
+  // áudio havia na frente dela (o quanto a transcrição se adiantou).
+  const stagePending = stage?.pending;
+  useEffect(() => {
+    if (!import.meta.env.DEV || !stagePending) return;
+    const sync = stageSyncRef.current;
+    for (const p of stagePending) {
+      if (sync.heardAt.has(p.index)) continue;
+      const text = sync.textByAt.get(p.at);
+      if (!text) continue;
+      sync.heardAt.set(p.index, text.now);
+      console.log(
+        `[stage] deixa do segmento ${p.index} ouvida, troca em ${Math.round(text.backlogMs)}ms (backlog)`,
+      );
+    }
+  }, [stagePending]);
+
+  // Na troca de card: quanto a troca esperou desde que a deixa foi ouvida, ou
+  // se veio da rede de segurança. Roda só quando o índice muda; o `stage` lido
+  // é o da mesma renderização.
   const stageActive = stage?.active ?? null;
   useEffect(() => {
     if (!import.meta.env.DEV || !stage || stage.active === 0) return;
-    const seg = stage.segments[stage.active];
-    if (!seg) return;
-    const origem = cueHeard(stage.heardRaw, seg.cue) ? `deixa "${seg.cue}"` : 'reserva';
-    const backlog = Math.round(playerRef.current?.backlogMs() ?? 0);
-    console.log(`[stage] segmento ${stage.active} ← ${origem} (backlog ${backlog}ms)`);
+    const heardAt = stageSyncRef.current.heardAt.get(stage.active);
+    console.log(
+      heardAt === undefined
+        ? `[stage] segmento ${stage.active} na tela (rede de segurança)`
+        : `[stage] segmento ${stage.active} na tela (atraso aplicado ${Math.round(stage.activeSince - heardAt)}ms)`,
+    );
   }, [stageActive]);
 
   function dismissWidget(id: string) {

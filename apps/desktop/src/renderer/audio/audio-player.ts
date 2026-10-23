@@ -53,10 +53,12 @@ export class PcmStreamPlayer {
     this.nextStart = start + buf.duration;
   }
 
-  /** Áudio ainda na fila (agendado e não tocado), em ms. 0 sem contexto. */
+  /** Áudio ainda na fila (agendado e não tocado), em ms, mais a latência de
+   *  saída do dispositivo (em Bluetooth passa de 150 ms). 0 sem contexto. */
   backlogMs(): number {
     if (!this.ctx) return 0;
-    return Math.max(0, (this.nextStart - this.ctx.currentTime) * 1000);
+    const queued = Math.max(0, (this.nextStart - this.ctx.currentTime) * 1000);
+    return queued + (this.ctx.outputLatency ?? 0) * 1000;
   }
 
   /** Para as fontes já agendadas e zera a fila — usado na interrupção. */

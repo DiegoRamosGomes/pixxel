@@ -1,22 +1,16 @@
-// Briefing matinal: junta tasks (in-progress + todo) + frase motivacional
-// num texto só. Disparado pelo Gemini Live quando o usuário abre a sessão
-// com "bom dia"/"vamos começar"/etc.
-//
-// Clima foi removido: localização via ipapi.co tava errada (provavelmente
-// mostrando IP da VPS/proxy) — voltar quando tiver fonte confiável.
+// Briefing matinal em palco: data (com feriado ou data comemorativa), clima de
+// Jaguaruna e as três notícias do dia (mundo, tecnologia e economia). Feriados,
+// clima e notícias são buscados em paralelo, cada um com orçamento de tempo:
+// se estourar ou falhar, o trecho some e o resto do briefing sai normal.
+// Disparado pelo Gemini Live quando o usuário abre a sessão com "bom dia".
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import {
-  listMyInProgressTasks,
-  listMyTodoTasks,
-  tasksToWidget,
-  type ClickupTask,
-} from './clickup.js';
-import { getActiveWorkStore, formatRelativeAge } from './active-work.js';
-import { getStorageStatus, type DiskInfo } from '@assistant/metrics';
-import type { Widget, StorageWidget } from '@assistant/shared/widgets';
+import type { NewsArea, Widget, WeatherWidget } from '@assistant/shared/widgets';
 import { dataPath } from '../data-dir.js';
+import { composeBriefing } from './briefing-compose.js';
+import { fetchNews, type NewsItem } from './news.js';
+import { fetchWeather } from './weather.js';
 
 const STATE_DIR = dataPath('state');
 const BRIEFING_STATE_FILE = join(STATE_DIR, 'briefing-state.json');
@@ -53,8 +47,6 @@ export async function markBriefingDoneToday(): Promise<void> {
   const today = getLocalDateParts().iso;
   await writeBriefingState({ lastBriefingDate: today });
 }
-
-const STORAGE_WIDGET_DELAY_MS = 2000;
 
 // Usuário mora no Brasil — toda lógica de "hoje" é ancorada no fuso de Brasília
 // pra não depender da TZ do host (que pode estar em UTC etc).
@@ -130,8 +122,7 @@ async function fetchHolidaysForYear(year: number): Promise<Holiday[]> {
 type TodayObservance = {
   // Frase pronta pra entrar no briefing, já com prefixo de aviso.
   line: string;
-  // Feriado nacional bate em dia não-útil — usado pra suprimir nudge de
-  // "continuar trabalho de ontem" e tirar widgets ruidosos.
+  // Feriado nacional bate em dia não-útil.
   isNationalHoliday: boolean;
   name: string;
 };
@@ -183,17 +174,18 @@ export function getDayPeriod(now: Date = new Date()): DayPeriod {
 }
 
 function greetingFor(period: DayPeriod): string {
-  if (period === 'morning') return 'Bom dia!';
-  if (period === 'afternoon') return 'Boa tarde!';
-  return 'Boa noite!';
+  if (period === 'morning') return 'Bom dia, senhor.';
+  if (period === 'afternoon') return 'Boa tarde, senhor.';
+  return 'Boa noite, senhor.';
 }
 
 async function detectTodayObservance(
   parts: LocalDateParts,
+  fetchHolidays: (year: number) => Promise<Holiday[]>,
 ): Promise<TodayObservance | null> {
   let national: Holiday | undefined;
   try {
-    const list = await fetchHolidaysForYear(parts.year);
+    const list = await fetchHolidays(parts.year);
     // Feriado nacional tem prioridade sobre data comemorativa local.
     national = list.find((h) => h.date === parts.iso);
   } catch {
@@ -228,197 +220,74 @@ async function detectTodayObservance(
   return null;
 }
 
-function buildStorageWidget(disks: DiskInfo[]): StorageWidget {
-  return {
-    kind: 'storage',
-    scope: 'single',
-    disks: disks.map((d) => ({
-      mount: d.mount,
-      fstype: d.fstype,
-      totalBytes: d.totalBytes,
-      usedBytes: d.usedBytes,
-      availBytes: d.availBytes,
-      usedPercent: d.usedPercent,
-    })),
-  };
-}
+export type BriefingDeps = {
+  now: () => Date;
+  fetchWeather: () => Promise<WeatherWidget | null>;
+  fetchNews: () => Promise<NewsItem[]>;
+  fetchHolidays?: (year: number) => Promise<Holiday[]>;
+};
 
-function formatGB(bytes: number): string {
-  const gb = bytes / 1024 ** 3;
-  if (gb >= 100) return `${Math.round(gb)} GB`;
-  return `${gb.toFixed(1)} GB`;
-}
+/** Tempo máximo que cada fonte (feriados, clima, notícias) tem pra responder. */
+export const BRIEFING_FETCH_BUDGET_MS = 5000;
 
-async function fetchStorage(): Promise<{ line: string; disks: DiskInfo[] }> {
+const defaultDeps: BriefingDeps = {
+  now: () => new Date(),
+  fetchWeather: () => fetchWeather('today').then((r) => r.widget ?? null),
+  fetchNews: () => fetchNews(),
+  fetchHolidays: fetchHolidaysForYear,
+};
+
+// Corre a busca contra o orçamento; timeout ou erro viram o valor de reserva.
+// O timer é limpo quando a busca termina antes, pra não segurar o processo.
+async function withBudget<T>(run: () => Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), BRIEFING_FETCH_BUDGET_MS);
+  });
   try {
-    const r = await getStorageStatus('/');
-    const d = r.disks[0];
-    if (!d) return { line: '', disks: [] };
-    return {
-      line: `Disco principal com ${formatGB(d.availBytes)} livres (${d.usedPercent}% usado).`,
-      disks: r.disks,
-    };
-  } catch {
-    return { line: '', disks: [] };
+    return await Promise.race([run().catch(() => fallback), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-const MOTIVATIONAL = [
-  'O segredo de avançar é começar.',
-  'Disciplina é fazer o que precisa ser feito mesmo quando não tá afim.',
-  'Foco no progresso, não na perfeição.',
-  'Pequenos passos diários viram grandes resultados.',
-  'Hoje é um bom dia pra resolver aquilo que tava enrolando.',
-  'Você não precisa estar perfeito, precisa estar começado.',
-  'O melhor momento pra fazer algo que importa é agora.',
-  'Cada bug resolvido é uma vitória. Comemora.',
-  'A meta não é fazer tudo — é fazer o que importa hoje.',
-  'Hoje você tem 24 horas. Use 1 ou 2 bem usadas e o dia já vale.',
-  'Confia no processo. Resultado é consequência.',
-  'Energia segue atenção. Escolhe onde colocar a sua.',
-  'Feito é melhor que perfeito.',
-  'Comece pelo mais difícil enquanto a mente tá fresca.',
-  'Não dá pra controlar tudo, mas dá pra controlar o próximo passo.',
-];
-
-function pickMotivational(): string {
-  // Pega baseado no dia do ano pra mesma frase no mesmo dia (consistência),
-  // mas rotaciona conforme avança.
-  const start = new Date(new Date().getFullYear(), 0, 0).getTime();
-  const dayOfYear = Math.floor((Date.now() - start) / 86_400_000);
-  return MOTIVATIONAL[dayOfYear % MOTIVATIONAL.length];
-}
-
-function taskName(t: ClickupTask): string {
-  return t.name;
-}
-
-const NUMBER_PT: Record<number, string> = {
-  1: 'uma',
-  2: 'duas',
-  3: 'três',
-  4: 'quatro',
-  5: 'cinco',
-  6: 'seis',
-  7: 'sete',
-  8: 'oito',
-  9: 'nove',
-  10: 'dez',
-};
-
-function num(n: number): string {
-  return NUMBER_PT[n] ?? String(n);
-}
-
-function narrateInProgress(tasks: ClickupTask[]): string {
-  if (tasks.length === 0) return '';
-  const n = tasks.length;
-  const head = tasks.slice(0, 3).map(taskName).join(', ');
-  const tail = n > 3 ? `, mais ${n - 3} outras` : '';
-  if (n === 1) return `Você tem uma tarefa em andamento: ${head}.`;
-  return `Você tem ${num(n)} tarefas em andamento: ${head}${tail}.`;
-}
-
-function narrateTodo(tasks: ClickupTask[]): string {
-  if (tasks.length === 0) return '';
-  const n = tasks.length;
-  const head = tasks.slice(0, 3).map(taskName).join(', ');
-  const tail = n > 3 ? `, mais ${n - 3} outras` : '';
-  if (n === 1) return `E uma pendente pra começar: ${head}.`;
-  return `E ${num(n)} pendentes pra começar: ${head}${tail}.`;
-}
-
-export async function buildMorningBriefing(): Promise<{
+export async function buildMorningBriefing(deps: Partial<BriefingDeps> = {}): Promise<{
   text: string;
   widgets: Widget[];
   widgetDelaysMs: number[];
   meta: {
-    inProgressCount: number;
-    todoCount: number;
-    clickupOk: boolean;
+    news: Array<{ area: NewsArea; title: string; url: string }>;
     holiday: { name: string; isNationalHoliday: boolean } | null;
   };
 }> {
-  const localParts = getLocalDateParts();
-  const [inProgress, todo, storage, observance] = await Promise.all([
-    listMyInProgressTasks().catch(() => null),
-    listMyTodoTasks().catch(() => null),
-    fetchStorage(),
-    detectTodayObservance(localParts),
+  const d = { ...defaultDeps, ...deps };
+  const fetchHolidays = d.fetchHolidays ?? fetchHolidaysForYear;
+  const now = d.now();
+  const localParts = getLocalDateParts(now);
+
+  const [observance, weather, news] = await Promise.all([
+    withBudget(() => detectTodayObservance(localParts, fetchHolidays), null),
+    withBudget(() => d.fetchWeather(), null),
+    withBudget(() => d.fetchNews(), [] as NewsItem[]),
   ]);
-  const storageLine = storage.line;
 
-  const dow = localParts.weekday;
-  const isWeekend = dow === 0 || dow === 6;
-  const isHoliday = observance?.isNationalHoliday ?? false;
-  // Em fim de semana ou feriado nacional, tarefas em aberto viram ruído.
-  const skipTasks = isWeekend || isHoliday;
-
-  const period = getDayPeriod();
-  const parts: string[] = [greetingFor(period)];
-  parts.push(narrateTodayDate(localParts));
-  if (observance) parts.push(observance.line);
-
-  const clickupOk = inProgress != null && todo != null;
-  if (!skipTasks) {
-    if (clickupOk) {
-      const inProgressLine = narrateInProgress(inProgress!);
-      const todoLine = narrateTodo(todo!);
-      if (!inProgressLine && !todoLine) {
-        parts.push('Você não tem nenhuma tarefa pendente nem em andamento.');
-      } else {
-        if (inProgressLine) parts.push(inProgressLine);
-        if (todoLine) parts.push(todoLine);
-      }
-    } else {
-      parts.push('Não consegui buscar as tarefas no ClickUp agora.');
-    }
-  }
-
-  if (storageLine) parts.push(storageLine);
-
-  // Em feriado nacional ou fim de semana o nudge "quer continuar?" vira ruído — pula.
-  if (isHoliday) {
-    parts.push('Aproveita o dia. Algo que eu possa ajudar?');
-  } else if (isWeekend) {
-    parts.push('Bom fim de semana. Algo que eu possa ajudar?');
-  } else {
-    const lastUnfinished = getActiveWorkStore().lastUnfinished(7);
-    if (lastUnfinished) {
-      const age = formatRelativeAge(lastUnfinished.startedAt);
-      parts.push(
-        `Você estava trabalhando em "${lastUnfinished.description}" (começou ${age}). Quer continuar nessa?`,
-      );
-    } else {
-      parts.push('O que vamos fazer agora?');
-    }
-  }
-
-  const widgets: Widget[] = [];
-  const widgetDelaysMs: number[] = [];
-  if (!skipTasks && inProgress && inProgress.length > 0) {
-    widgets.push(tasksToWidget('Em andamento', inProgress));
-    widgetDelaysMs.push(0);
-  }
-  if (!skipTasks && todo && todo.length > 0) {
-    widgets.push(tasksToWidget('Pendentes', todo));
-    widgetDelaysMs.push(0);
-  }
-  // Em feriado/fim de semana, suprime widget de disco pra não poluir a tela
-  // com info operacional num dia que não é de trabalho.
-  if (storage.disks.length > 0 && !isHoliday && !isWeekend) {
-    widgets.push(buildStorageWidget(storage.disks));
-    widgetDelaysMs.push(STORAGE_WIDGET_DELAY_MS);
-  }
+  const composed = composeBriefing({
+    greeting: greetingFor(getDayPeriod(now)),
+    dateLine: narrateTodayDate(localParts),
+    weekday: WEEKDAY_PT[localParts.weekday],
+    day: localParts.day,
+    monthYear: `${MONTH_PT[localParts.month - 1]} de ${localParts.year}`,
+    observance,
+    weather,
+    news,
+  });
 
   return {
-    text: parts.join(' '),
-    widgets,
-    widgetDelaysMs,
+    text: composed.text,
+    widgets: [composed.widget],
+    widgetDelaysMs: [0],
     meta: {
-      inProgressCount: inProgress?.length ?? 0,
-      todoCount: todo?.length ?? 0,
-      clickupOk,
+      news: composed.news,
       holiday: observance
         ? { name: observance.name, isNationalHoliday: observance.isNationalHoliday }
         : null,

@@ -1143,8 +1143,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
   {
     name: 'morning_briefing',
     description:
-      'Briefing matinal: clima de hoje + tasks em progresso e pendentes do ' +
-      'ClickUp + uma frase motivacional. Retorna texto curto pronto pra falar.\n' +
+      'Briefing matinal: data (com feriado ou data comemorativa), clima de Jaguaruna e as três notícias do dia (mundo, tecnologia e economia). Retorna o texto pronto pra falar e, em meta.news, a manchete e a url de cada notícia.\n' +
       'GATILHOS: usuário diz "bom dia" / "bom diaaa" / "e aí, bom dia" / ' +
       '"vamos começar os trabalhos" / "vamos começar" / "começando o dia" / ' +
       '"vamos pra cima" e variações análogas.\n' +

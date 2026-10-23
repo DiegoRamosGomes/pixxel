@@ -167,6 +167,7 @@ const SYSTEM_INSTRUCTION =
   'morning_briefing especificamente: chama a tool em silêncio e quando ' +
   'receber o retorno, fala EXATAMENTE o texto que veio. Sem invenção, ' +
   'sem prefixo, sem "Olá Diego!" antes.\n' +
+  '7. NOTÍCIAS DO BRIEFING: se depois do briefing o usuário pedir pra abrir uma notícia ("abre a de economia", "abre a segunda"), chame open_url com a url correspondente de meta.news do morning_briefing. Nunca leia URL nem nome de portal em voz alta.\n' +
   '8. PEDIDO QUE NENHUMA TOOL RESOLVE (feature/integração inexistente): ' +
   'Quando o usuário pedir algo que claramente nenhuma das suas tools cobre ' +
   '(ex: "manda mensagem no WhatsApp", "controla a luz da casa", "lê meu ' +

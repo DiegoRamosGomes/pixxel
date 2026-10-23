@@ -8,6 +8,8 @@ export function ttlForWidget(kind: string): number {
       return 60_000;
     case 'task-detail':
       return 90_000;
+    case 'briefing':
+      return 180_000;
     case 'youtube':
       return 45_000;
     case 'search-results':

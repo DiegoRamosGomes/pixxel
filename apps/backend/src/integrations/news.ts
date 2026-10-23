@@ -82,13 +82,33 @@ function shortenSummary(text: string): string {
   return base.replace(/[\s,;:.\-–—]+$/, '') + '…';
 }
 
-function extractSummary(block: string): string {
+/** Linha curta de crédito da foto ("REUTERS/Fulano/Ilustração", "Foto: Divulgação"). */
+function isPhotoCredit(line: string): boolean {
+  if (line.length > 80 || line.endsWith('.')) return false;
+  const norm = normalizeSpeech(line);
+  return line.includes('/') || norm.endsWith('foto de arquivo') || norm.endsWith('divulgacao');
+}
+
+/** Texto da description sem tags. No g1 ela começa com a imagem, a legenda
+ *  (igual ao título) e o crédito da foto, cada um na sua linha: separa por
+ *  linha antes de colapsar os espaços e descarta essas duas. */
+function descriptionText(html: string, title: string): string {
+  const titleNorm = normalizeSpeech(title);
+  const text = decodeEntities(html.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, ' '));
+  return text
+    .split('\n')
+    .map(collapse)
+    .filter((line) => line && normalizeSpeech(line) !== titleNorm && !isPhotoCredit(line))
+    .join(' ');
+}
+
+function extractSummary(block: string, title: string): string {
   const subtitle = htmlToText(htmlTag(block, 'atom:subtitle'));
   if (subtitle) return shortenSummary(subtitle);
   const description = htmlTag(block, 'description');
   const firstP = description.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
   const fromP = firstP ? htmlToText(firstP[1]) : '';
-  return shortenSummary(fromP || htmlToText(description));
+  return shortenSummary(fromP || descriptionText(description, title));
 }
 
 function attr(tagText: string, name: string): string | undefined {
@@ -131,7 +151,7 @@ export function parseRss(xml: string, source: string): FeedItem[] {
       items.push({
         title,
         url,
-        summary: extractSummary(block),
+        summary: extractSummary(block, title),
         imageUrl: extractImage(block),
         publishedAt: date && !Number.isNaN(date.getTime()) ? date : null,
         source,
@@ -181,9 +201,12 @@ const TECH_RELEVANT = [
   'ia', 'inteligencia artificial', 'openai', 'chatgpt', 'gemini',
 ].map((t) => new RegExp(`(?:^| )${t}s?(?: |$)`));
 
-const TECH_PROMO = ['oferta', 'promocao', 'desconto', 'cupom', 'black friday', 'imperdivel'].map(
-  (t) => new RegExp(`(?:^| )${t}(?:s|ao|oes)?(?: |$)`),
-);
+// Plural irregular ("promoções", "cupons", "imperdíveis") vai escrito na lista;
+// o resto aceita o plural simples com "s".
+const TECH_PROMO = [
+  'oferta', 'promocao', 'promocoes', 'desconto', 'cupom', 'cupons',
+  'black friday', 'imperdivel', 'imperdiveis',
+].map((t) => new RegExp(`(?:^| )${t}s?(?: |$)`));
 
 function techScore(title: string): number {
   const norm = normalizeSpeech(title);

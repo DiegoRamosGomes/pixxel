@@ -28,6 +28,32 @@ describe('parseRss', () => {
     expect(items[0].publishedAt?.toISOString()).toBe('2026-10-23T14:16:03.000Z');
   });
 
+  it('g1 sem subtítulo: resumo sem legenda nem crédito da foto', () => {
+    const xml = wrap(`<item><title>Microsoft diz que sua IA superou médicos em testes de diagnóstico</title>
+<link>https://g1.globo.com/tecnologia/noticia/2026/10/23/microsoft-diz-que.ghtml</link>
+<description><![CDATA[ <img src="https://s2-g1.glbimg.com/abc.jpg" /><br /> ]]> Microsoft diz que sua IA superou médicos em testes de diagnóstico
+REUTERS/Dado Ruvic/Ilustração
+Pesquisadores da Microsoft afirmam que a ferramenta acertou mais diagnósticos que médicos generalistas.</description>
+<pubDate>Fri, 23 Oct 2026 14:16:03 -0000</pubDate></item>`);
+    const [g1] = parseRss(xml, 'g1');
+    expect(g1.summary.startsWith('Pesquisadores da Microsoft afirmam')).toBe(true);
+    expect(g1.summary).toBe(
+      'Pesquisadores da Microsoft afirmam que a ferramenta acertou mais diagnósticos que médicos generalistas.',
+    );
+  });
+
+  it('descarta crédito "Foto de arquivo" e "Divulgação" no resumo de reserva', () => {
+    const xml = (credit: string) =>
+      wrap(`<item><title>Selic é mantida</title><link>https://g1.globo.com/a</link>
+<description>Selic é mantida!
+${credit}
+Texto do resumo.</description></item>`);
+    expect(parseRss(xml('Banco Central — Foto de arquivo'), 'g1')[0].summary).toBe('Texto do resumo.');
+    expect(parseRss(xml('Foto: Divulgação'), 'g1')[0].summary).toBe('Texto do resumo.');
+    // Linha longa ou com ponto final é texto, não crédito.
+    expect(parseRss(xml('Juros ficam em 15% a/a.'), 'g1')[0].summary).toBe('Juros ficam em 15% a/a.');
+  });
+
   it('parse olhar', () => {
     const xml = wrap(`<item><title>Notícia do Olhar</title>
 <link>https://olhardigital.com.br/2026/10/23/noticia/</link>
@@ -127,6 +153,23 @@ describe('pickNews', () => {
       NOW,
     );
     expect(result[0].title).toBe('Apple lança chip');
+  });
+
+  it('oferta no plural também desce', () => {
+    const contra = (title: string) =>
+      pickNews(
+        feeds({
+          tecnologia: [
+            item({ title, url: 'https://g1.globo.com/tecnologia/a', publishedAt: ago(1) }),
+            item({ title: 'Apple lança chip', url: 'https://g1.globo.com/tecnologia/b', publishedAt: ago(5) }),
+          ],
+        }),
+        NOW,
+      )[0].title;
+    expect(contra('Veja promoções de fones')).toBe('Apple lança chip');
+    expect(contra('Veja cupons de desconto')).toBe('Apple lança chip');
+    expect(contra('Cupons para fones')).toBe('Apple lança chip');
+    expect(contra('Fones imperdíveis')).toBe('Apple lança chip');
   });
 
   it('sem repetida entre áreas', () => {

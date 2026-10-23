@@ -10,7 +10,8 @@
     "dev:backend": "npm run dev -w apps/backend",
     "dev:desktop": "npm run dev -w apps/desktop",
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   },
   "engines": {
     "node": ">=22"

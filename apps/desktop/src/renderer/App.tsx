@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { cueHeard } from '@assistant/shared/briefing-cues';
 import type {
   ConnState,
   LiveState,
@@ -18,6 +19,8 @@ import { Sidebar } from './components/Sidebar.js';
 import { OrbControls } from './components/OrbControls.js';
 import { startMicCapture, type MicCaptureHandle } from './audio/mic-capture.js';
 import { PcmStreamPlayer } from './audio/audio-player.js';
+import { stageReducer, toStageEvent } from './briefing/stage.js';
+import { BriefingStage } from './briefing/BriefingStage.js';
 
 type Role = 'user' | 'assistant';
 
@@ -97,10 +100,24 @@ export function App() {
   // Contadores pra z-index incremental e rotação de cantos.
   const widgetZRef = useRef(10);
   const widgetSpawnIdxRef = useRef(0);
+  // Palco do briefing (stage.ts). O reducer precisa saber de onde o live veio
+  // pra reconhecer o fim do turno (speaking → ready).
+  const [stage, dispatchStage] = useReducer(stageReducer, null);
+  const prevLiveKindRef = useRef<string>('idle');
 
   useEffect(() => {
     const off = window.assistant.onEvent((event: RendererEvent) => {
       setAwaitingResponse((prev) => nextAwaiting(prev, event));
+      // O backlog é o áudio ainda na fila do player: a transcrição chega antes
+      // de a fala tocar, então a troca de card espera por ele.
+      const stageEvent = toStageEvent(
+        event,
+        performance.now(),
+        playerRef.current?.backlogMs() ?? 0,
+        prevLiveKindRef.current,
+      );
+      if (event.type === 'live_state') prevLiveKindRef.current = event.state.kind;
+      if (stageEvent) dispatchStage(stageEvent);
       switch (event.type) {
         case 'conn':
           setConn({ state: event.state, reason: event.reason });
@@ -129,11 +146,17 @@ export function App() {
         case 'live_audio':
           playerRef.current?.enqueue(event.pcm);
           break;
+        case 'live_interrupted':
+          // O usuário falou por cima: corta o que ainda estava na fila do player.
+          playerRef.current?.stopAll();
+          break;
         case 'widget_dismiss': {
           dismissWidget(event.id);
           break;
         }
         case 'widget': {
+          // O briefing vai pro palco, não vira card flutuante.
+          if (event.widget.kind === 'briefing') break;
           const pos = computeSpawnPosition(widgetSpawnIdxRef.current++);
           widgetZRef.current += 1;
           setWidgets((prev) => [
@@ -254,6 +277,30 @@ export function App() {
       y: 24,
     });
   }, []);
+
+  // Relógio do palco: trocas agendadas, rede de segurança e fechamento só
+  // andam com tick. Roda só enquanto o palco está aberto.
+  const stageOpen = stage !== null;
+  useEffect(() => {
+    if (!stageOpen) return;
+    const id = window.setInterval(() => {
+      dispatchStage({ type: 'tick', now: performance.now() });
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [stageOpen]);
+
+  // Medição pedida no spec: a cada troca de card, se veio da deixa ou da rede
+  // de segurança e quanto áudio ainda está na fila do player. Só no dev.
+  // Roda só quando o índice muda; o `stage` lido é o da mesma renderização.
+  const stageActive = stage?.active ?? null;
+  useEffect(() => {
+    if (!import.meta.env.DEV || !stage || stage.active === 0) return;
+    const seg = stage.segments[stage.active];
+    if (!seg) return;
+    const origem = cueHeard(stage.heardRaw, seg.cue) ? `deixa "${seg.cue}"` : 'reserva';
+    const backlog = Math.round(playerRef.current?.backlogMs() ?? 0);
+    console.log(`[stage] segmento ${stage.active} ← ${origem} (backlog ${backlog}ms)`);
+  }, [stageActive]);
 
   function dismissWidget(id: string) {
     setWidgets((prev) => prev.filter((w) => w.id !== id));
@@ -577,7 +624,20 @@ export function App() {
 
       <main>
         <div className="orb-pane" ref={orbPaneRef}>
-          <Orb state={orbState} present={userPresent} />
+          {/* Com o palco no ar o orb sai do centro; volta na visão final. */}
+          {(!stage || stage.final) && <Orb state={orbState} present={userPresent} />}
+          {stage && (
+            <BriefingStage
+              key={stage.openedAt}
+              state={stage}
+              onClose={() => dispatchStage({ type: 'close' })}
+              onOpenNews={(url) => {
+                void window.assistant.openExternal(url).then((r) => {
+                  if (!r.ok) console.warn('[stage] não abriu a matéria:', r.reason);
+                });
+              }}
+            />
+          )}
           <OrbControls
             live={live}
             micState={micStatus.state}

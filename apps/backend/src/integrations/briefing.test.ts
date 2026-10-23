@@ -41,6 +41,8 @@ function deps(over: Record<string, unknown> = {}) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('buildMorningBriefing', () => {
@@ -78,6 +80,41 @@ describe('buildMorningBriefing', () => {
     const r = await buildMorningBriefing(deps());
     expect(r.text).not.toContain('tarefa');
     expect(r.text).not.toContain('Disco');
+  });
+
+  it('fetch do Nager.Date tem timeout de 3,5 s', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const fake = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify([{ date: '2026-10-23', localName: 'Dia Real', global: true }]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fake);
+
+    const r = await buildMorningBriefing(deps({ fetchHolidays: undefined }));
+
+    expect(String(fake.mock.calls[0][0])).toContain('date.nager.at');
+    expect(timeout).toHaveBeenCalledWith(3500);
+    expect(fake.mock.calls[0][1]?.signal).toBe(timeout.mock.results[0].value);
+    expect(r.meta.holiday).toEqual({ name: 'Dia Real', isNationalHoliday: true });
+  });
+
+  it('timeout do Nager.Date segue sem feriado', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      }),
+    );
+
+    // Outro ano, pra não pegar o cache de feriados do teste anterior.
+    const r = await buildMorningBriefing(
+      deps({ now: () => new Date('2027-10-22T10:00:00-03:00'), fetchHolidays: undefined }),
+    );
+
+    expect(r.meta.holiday).toBeNull();
+    expect(r.text.startsWith('Bom dia, senhor.')).toBe(true);
   });
 
   it('feriado vem das deps injetadas', async () => {

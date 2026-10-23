@@ -33,6 +33,19 @@ const WMO_CODES: Record<number, string> = {
   99: 'tempestade com granizo forte',
 };
 
+/** Timeout do Open-Meteo: curto, pra não segurar o briefing. */
+export const WEATHER_FETCH_TIMEOUT_MS = 3500;
+
+type Forecast = {
+  current?: { temperature_2m?: number; weather_code?: number };
+  daily?: {
+    weather_code?: number[];
+    temperature_2m_max?: number[];
+    temperature_2m_min?: number[];
+    precipitation_probability_max?: number[];
+  };
+};
+
 function describeCode(code: number | undefined): string {
   if (code == null) return 'tempo indefinido';
   return WMO_CODES[code] ?? `código ${code}`;
@@ -47,24 +60,17 @@ export async function fetchWeather(
     `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
     `&timezone=America/Sao_Paulo&forecast_days=2`;
 
-  let res: Response;
+  // O timeout vale até o fim da leitura do corpo, então o json() fica no
+  // mesmo caminho de falha do fetch.
+  let data: Forecast;
   try {
-    res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(WEATHER_FETCH_TIMEOUT_MS) });
+    if (!res.ok) return { text: 'O serviço de clima respondeu com erro.' };
+    data = (await res.json()) as Forecast;
   } catch (err) {
     console.warn('[weather] open-meteo fetch failed:', err);
     return { text: 'Não consegui falar com o serviço de clima agora.' };
   }
-  if (!res.ok) return { text: 'O serviço de clima respondeu com erro.' };
-
-  const data = (await res.json()) as {
-    current?: { temperature_2m?: number; weather_code?: number };
-    daily?: {
-      weather_code?: number[];
-      temperature_2m_max?: number[];
-      temperature_2m_min?: number[];
-      precipitation_probability_max?: number[];
-    };
-  };
 
   if (when === 'today') {
     const t = data.current?.temperature_2m;

@@ -92,11 +92,15 @@ type Holiday = {
 // Cache de feriados nacionais por ano (Nager.Date, país = BR).
 const holidaysCache = new Map<number, Holiday[]>();
 
+/** Timeout do Nager.Date; estourou, o briefing segue sem feriado. */
+const HOLIDAYS_FETCH_TIMEOUT_MS = 3500;
+
 async function fetchHolidaysForYear(year: number): Promise<Holiday[]> {
   const cached = holidaysCache.get(year);
   if (cached) return cached;
   const res = await fetch(
     `https://date.nager.at/api/v3/PublicHolidays/${year}/${HOLIDAY_COUNTRY}`,
+    { signal: AbortSignal.timeout(HOLIDAYS_FETCH_TIMEOUT_MS) },
   );
   if (!res.ok) throw new Error(`nager.date ${res.status}`);
   const raw = (await res.json()) as Array<{

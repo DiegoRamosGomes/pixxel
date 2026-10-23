@@ -12,7 +12,7 @@ const forecast = {
 };
 
 function stubForecast() {
-  const fake = vi.fn(async (_input: string | URL | Request) =>
+  const fake = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
     new Response(JSON.stringify(forecast), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -25,6 +25,42 @@ function stubForecast() {
 describe('clima', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('fetch do Open-Meteo tem timeout de 3,5 s', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const fake = stubForecast();
+
+    await fetchWeather('today');
+
+    expect(timeout).toHaveBeenCalledWith(3500);
+    const init = fake.mock.calls[0][1] as RequestInit | undefined;
+    expect(init?.signal).toBe(timeout.mock.results[0].value);
+  });
+
+  it('timeout cai no caminho de falha', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      }),
+    );
+
+    const r = await fetchWeather('today');
+
+    expect(r.widget).toBeUndefined();
+    expect(r.text).toBe('Não consegui falar com o serviço de clima agora.');
+  });
+
+  it('corpo que falha na leitura também cai no caminho de falha', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('não é json', { status: 200 })));
+
+    const r = await fetchWeather('today');
+
+    expect(r.text).toBe('Não consegui falar com o serviço de clima agora.');
   });
 
   it('usa Jaguaruna fixa, sem geolocalização por IP', async () => {

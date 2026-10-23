@@ -41,7 +41,7 @@ async function writeBriefingState(s: BriefingState): Promise<void> {
   }
 }
 
-/** Retorna true se o briefing ainda não rodou hoje (no fuso PY). */
+/** Retorna true se o briefing ainda não rodou hoje (no fuso de Brasília). */
 export async function isFirstBriefingOfDay(): Promise<boolean> {
   const state = await readBriefingState();
   const today = getLocalDateParts().iso;
@@ -56,10 +56,10 @@ export async function markBriefingDoneToday(): Promise<void> {
 
 const STORAGE_WIDGET_DELAY_MS = 2000;
 
-// Usuário mora em Encarnación, PY — toda lógica de "hoje" é ancorada nesse fuso
-// pra não depender da TZ do host (que pode estar em UTC, BRT etc).
-const LOCAL_TZ = 'America/Asuncion';
-const HOLIDAY_COUNTRY = 'PY';
+// Usuário mora no Brasil — toda lógica de "hoje" é ancorada no fuso de Brasília
+// pra não depender da TZ do host (que pode estar em UTC etc).
+const LOCAL_TZ = 'America/Sao_Paulo';
+const HOLIDAY_COUNTRY = 'BR';
 
 type LocalDateParts = {
   year: number;
@@ -90,12 +90,17 @@ function getLocalDateParts(now: Date = new Date()): LocalDateParts {
   return { year, month, day, weekday, iso };
 }
 
-// Cache de feriados nacionais por ano (Nager.Date, país = PY).
-const holidaysCache = new Map<number, Array<{ date: string; name: string }>>();
+type Holiday = {
+  date: string;
+  name: string;
+  // Ponto facultativo (ex.: Carnaval) — vale menção, mas é dia útil.
+  optional: boolean;
+};
 
-async function fetchHolidaysForYear(
-  year: number,
-): Promise<Array<{ date: string; name: string }>> {
+// Cache de feriados nacionais por ano (Nager.Date, país = BR).
+const holidaysCache = new Map<number, Holiday[]>();
+
+async function fetchHolidaysForYear(year: number): Promise<Holiday[]> {
   const cached = holidaysCache.get(year);
   if (cached) return cached;
   const res = await fetch(
@@ -106,12 +111,18 @@ async function fetchHolidaysForYear(
     date: string;
     localName?: string;
     name?: string;
+    global?: boolean;
+    types?: string[];
   }>;
-  // localName vem em espanhol pra PY; é o que faz sentido narrar.
-  const data = raw.map((h) => ({
-    date: h.date,
-    name: h.localName || h.name || 'Feriado',
-  }));
+  // global=false é feriado estadual (ex.: 9 de julho só em SP) — fica de fora.
+  // localName vem em português pra BR; é o que faz sentido narrar.
+  const data = raw
+    .filter((h) => h.global !== false)
+    .map((h) => ({
+      date: h.date,
+      name: h.localName || h.name || 'Feriado',
+      optional: !(h.types ?? ['Public']).includes('Public'),
+    }));
   holidaysCache.set(year, data);
   return data;
 }
@@ -125,13 +136,12 @@ type TodayObservance = {
   name: string;
 };
 
-// Datas comemorativas que NÃO são feriado nacional em PY mas valem menção
-// no briefing. Mantido enxuto e localmente válido — datas BR foram removidas
-// porque o usuário mora em Encarnación, PY.
+// Datas comemorativas que NÃO são feriado nacional no Brasil mas valem menção
+// no briefing. Mantido enxuto.
 function specialDateForToday(parts: LocalDateParts): string | null {
   const { month, day } = parts;
-  if (month === 2 && day === 14) return 'Día de los Enamorados';
-  if (month === 3 && day === 8) return 'Día Internacional de la Mujer';
+  if (month === 3 && day === 8) return 'Dia Internacional da Mulher';
+  if (month === 6 && day === 12) return 'Dia dos Namorados';
   return null;
 }
 
@@ -155,7 +165,7 @@ function narrateTodayDate(parts: LocalDateParts): string {
 
 export type DayPeriod = 'morning' | 'afternoon' | 'night';
 
-/** Hora local atual em PY (0-23). */
+/** Hora local atual no fuso de Brasília (0-23). */
 function getLocalHour(now: Date = new Date()): number {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: LOCAL_TZ,
@@ -181,7 +191,7 @@ function greetingFor(period: DayPeriod): string {
 async function detectTodayObservance(
   parts: LocalDateParts,
 ): Promise<TodayObservance | null> {
-  let national: { date: string; name: string } | undefined;
+  let national: Holiday | undefined;
   try {
     const list = await fetchHolidaysForYear(parts.year);
     // Feriado nacional tem prioridade sobre data comemorativa local.
@@ -190,9 +200,17 @@ async function detectTodayObservance(
     // segue sem feriado nacional — datas especiais ainda podem aplicar
   }
 
+  if (national?.optional) {
+    return {
+      line: `Atenção: hoje é ${national.name} — ponto facultativo.`,
+      isNationalHoliday: false,
+      name: national.name,
+    };
+  }
+
   if (national) {
     return {
-      line: `Atenção: hoje é ${national.name} — feriado nacional no Paraguai, não é dia útil.`,
+      line: `Atenção: hoje é ${national.name} — feriado nacional, não é dia útil.`,
       isNationalHoliday: true,
       name: national.name,
     };

@@ -62,7 +62,7 @@ const SYSTEM_INSTRUCTION =
   'no board "Pessoal" — não existe parâmetro de board e qualquer outro quadro é inacessível. ' +
   'Antes de ações destrutivas (archive, remove_label) que o usuário não tenha pedido ' +
   'explicitamente nessa frase, CONFIRME ("posso arquivar?"). Datas: converta horário em ' +
-  'linguagem natural pra ISO 8601 em fuso America/Asuncion antes de chamar.\n' +
+  'linguagem natural pra ISO 8601 em fuso America/Sao_Paulo antes de chamar.\n' +
   '   - tocar música/vídeo → play_youtube\n' +
   '   - resumir vídeo do YouTube ("resume esse vídeo X", "do que fala esse ' +
   'vídeo", "me explica esse vídeo do YouTube") → summarize_youtube. Pode ' +

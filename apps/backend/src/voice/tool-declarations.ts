@@ -641,7 +641,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
           type: 'string',
           description:
             'Data de vencimento em ISO 8601 (opcional). Você converte horários em linguagem ' +
-            'natural pra absoluto antes de chamar (use fuso America/Asuncion).',
+            'natural pra absoluto antes de chamar (use fuso America/Sao_Paulo).',
         },
         labels: {
           type: 'array',

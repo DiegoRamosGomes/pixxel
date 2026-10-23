@@ -52,9 +52,9 @@ export async function searchWeb(query: string): Promise<WebSearchOutcome> {
         include_answer: true,
         include_raw_content: false,
         include_images: false,
-        // Usuário mora em Encarnación, PY — viesa pra fontes locais/nacionais
-        // pra evitar resultado BR vindo de "feriado de hoje" etc.
-        country: 'paraguay',
+        // Usuário mora no Brasil — viesa pra fontes nacionais em perguntas
+        // locais ("feriado de hoje", cotação, notícias).
+        country: 'brazil',
       }),
       signal: controller.signal,
     });

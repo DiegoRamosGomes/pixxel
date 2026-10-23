@@ -15,7 +15,11 @@ const ConfigSchema = z.object({
   PIXXEL_DATA_DIR: z.string().optional(),
   // Gemini Live roda na API. Sem chave, a voz fica indisponível pros clientes.
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_LIVE_MODEL: z.string().optional(),
+  // Vazio (como vem no .env.example) = modelo padrão do gemini-live.ts.
+  GEMINI_LIVE_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => v || undefined),
   // Quanto a API espera o cliente responder uma função local.
   LOCAL_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 });

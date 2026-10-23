@@ -19,7 +19,7 @@ export async function inputBackendAvailable(): Promise<boolean> {
 
 export async function moveMouse(x: number, y: number, unit: MouseUnit = 'pixel'): Promise<void> {
   const { px, py } = toPixels(x, y, unit);
-  await xdotool.moveMouse(px, py, 'pixel');
+  await xdotool.moveMouse(px, py);
 }
 
 export async function clickMouse(button: 1 | 2 | 3 = 1): Promise<void> {

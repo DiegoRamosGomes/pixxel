@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ConnState, LiveState } from '../../shared/ipc.js';
-import type { ClientCommand } from '@assistant/shared';
 import { useDragHandle } from './widgets/useDragHandle.js';
 
 type Role = 'user' | 'assistant';
@@ -13,15 +12,6 @@ export type ChatMessage =
       content: string;
       streaming: boolean;
       model?: string;
-    }
-  | {
-      id: string;
-      kind: 'command';
-      role: 'assistant';
-      command: ClientCommand;
-      spokenLabel: string;
-      source: 'regex' | 'llm';
-      executed?: { ok: boolean; reason?: string };
     };
 
 type Props = {
@@ -192,38 +182,18 @@ export function ChatPanel({
             Diga oi pra começar. Enter envia, Shift+Enter quebra linha.
           </p>
         )}
-        {messages.map((m) =>
-          m.kind === 'text' ? (
-            <div key={m.id} className={`msg msg--${m.role}`}>
-              <div className="msg__role">
-                {m.role === 'user' ? 'você' : 'pixxel'}
-                {m.model ? ` · ${m.model}` : ''}
-                {m.streaming ? ' · …' : ''}
-              </div>
-              <div className="msg__content">
-                {m.content || (m.streaming ? '…' : '')}
-              </div>
+        {messages.map((m) => (
+          <div key={m.id} className={`msg msg--${m.role}`}>
+            <div className="msg__role">
+              {m.role === 'user' ? 'você' : 'pixxel'}
+              {m.model ? ` · ${m.model}` : ''}
+              {m.streaming ? ' · …' : ''}
             </div>
-          ) : (
-            <div key={m.id} className="msg msg--cmd">
-              <div className="msg__role">
-                pixxel · ação · {m.source}
-                {m.executed
-                  ? m.executed.ok
-                    ? ' · ok'
-                    : ' · falhou'
-                  : ' · executando…'}
-              </div>
-              <div className="msg__content">
-                <strong>{m.spokenLabel}</strong>
-                <span className="cmd-detail">{JSON.stringify(m.command)}</span>
-                {m.executed && !m.executed.ok && m.executed.reason && (
-                  <div className="cmd-error">{m.executed.reason}</div>
-                )}
-              </div>
+            <div className="msg__content">
+              {m.content || (m.streaming ? '…' : '')}
             </div>
-          ),
-        )}
+          </div>
+        ))}
       </div>
 
       <div className="chat-panel__compose">

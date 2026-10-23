@@ -5,7 +5,6 @@ import type {
   RendererEvent,
 } from '../shared/ipc.js';
 import type { Widget } from '../shared/widgets.js';
-import type { ClientCommand } from '@assistant/shared';
 import { Orb, type OrbState } from './components/Orb.js';
 import { WidgetCard } from './components/widgets/WidgetCard.js';
 import { ChatPanel } from './components/ChatPanel.js';
@@ -29,15 +28,6 @@ type Message =
       content: string;
       streaming: boolean;
       model?: string;
-    }
-  | {
-      id: string;
-      kind: 'command';
-      role: 'assistant';
-      command: ClientCommand;
-      spokenLabel: string;
-      source: 'regex' | 'llm';
-      executed?: { ok: boolean; reason?: string };
     };
 
 const CONN_LABELS: Record<ConnState, string> = {
@@ -113,93 +103,6 @@ export function App() {
         case 'conn':
           setConn({ state: event.state, reason: event.reason });
           break;
-        case 'assistant_start':
-          setAwaitingResponse(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: event.messageId,
-              kind: 'text',
-              role: 'assistant',
-              content: '',
-              streaming: true,
-              model: event.model,
-            },
-          ]);
-          break;
-        case 'assistant_chunk':
-          setAwaitingResponse(false);
-          setMessages((prev) => {
-            const exists = prev.some((m) => m.id === event.messageId);
-            if (!exists) {
-              return [
-                ...prev,
-                {
-                  id: event.messageId,
-                  kind: 'text',
-                  role: 'assistant',
-                  content: event.delta,
-                  streaming: true,
-                },
-              ];
-            }
-            return prev.map((m) =>
-              m.id === event.messageId && m.kind === 'text'
-                ? { ...m, content: m.content + event.delta }
-                : m,
-            );
-          });
-          break;
-        case 'assistant_done':
-          setMessages((prev) => {
-            const exists = prev.some((m) => m.id === event.messageId);
-            if (!exists) {
-              return [
-                ...prev,
-                {
-                  id: event.messageId,
-                  kind: 'text',
-                  role: 'assistant',
-                  content: event.fullText || '(sem resposta)',
-                  streaming: false,
-                },
-              ];
-            }
-            return prev.map((m) =>
-              m.id === event.messageId && m.kind === 'text'
-                ? { ...m, content: event.fullText, streaming: false }
-                : m,
-            );
-          });
-          break;
-        case 'assistant_command':
-          setAwaitingResponse(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: event.messageId,
-              kind: 'command',
-              role: 'assistant',
-              command: event.command,
-              spokenLabel: event.spokenLabel,
-              source: event.source,
-              executed: event.executed,
-            },
-          ]);
-          break;
-        case 'assistant_error':
-          setAwaitingResponse(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              kind: 'text',
-              role: 'assistant',
-              content: `[erro: ${event.code}] ${event.message}`,
-              streaming: false,
-            },
-          ]);
-          break;
         case 'live_state':
           setLive(event.state);
           // Quando o turno do modelo termina (volta pra 'ready') ou tudo morre,
@@ -221,22 +124,6 @@ export function App() {
             void teardownLiveLocal();
           }
           break;
-        case 'auto_start_live': {
-          // Pós-restart via tool restart_app: religa Live sozinho. Mesmo
-          // fluxo de onToggleLive mas sem depender da closure.
-          void (async () => {
-            const res = await window.assistant.liveStart();
-            if (!res.ok) {
-              setLive({ kind: 'unavailable', reason: res.reason ?? 'falhou ao iniciar' });
-              return;
-            }
-            if (!playerRef.current) {
-              playerRef.current = new PcmStreamPlayer(24000);
-            }
-            await playerRef.current.resume();
-          })();
-          break;
-        }
         case 'live_audio':
           playerRef.current?.enqueue(event.pcm);
           break;
@@ -495,9 +382,8 @@ export function App() {
     if (!text) return;
 
     const liveReady = live.kind === 'ready' || live.kind === 'speaking';
-    // Se a sessão Live tá viva, manda pra ela: resposta vem em áudio com a
-    // mesma voz da conversa por mic. Senão, cai no pipeline atual (backend/NIM).
-    if (!liveReady && conn.state !== 'open') return;
+    // Texto vai pra mesma sessão de voz na API: a resposta vem em áudio.
+    if (!liveReady) return;
 
     setMessages((prev) => [
       ...prev,
@@ -532,8 +418,6 @@ export function App() {
       }
       return;
     }
-
-    await window.assistant.sendText(text);
   }
 
   async function onToggleLive() {

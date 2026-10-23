@@ -1,4 +1,3 @@
-import type { ClientCommand } from '@assistant/shared';
 import type { Widget } from './widgets.js';
 
 export type { Widget } from './widgets.js';
@@ -10,20 +9,7 @@ import type { LiveState } from '@assistant/shared';
 
 export type RendererEvent =
   | { type: 'conn'; state: ConnState; reason?: string }
-  | { type: 'assistant_start'; messageId: string; model: string }
-  | { type: 'assistant_chunk'; messageId: string; delta: string }
-  | { type: 'assistant_done'; messageId: string; fullText: string }
-  | {
-      type: 'assistant_command';
-      messageId: string;
-      command: ClientCommand;
-      spokenLabel: string;
-      source: 'regex' | 'llm';
-      executed: { ok: boolean; reason?: string };
-    }
-  | { type: 'assistant_error'; code: string; message: string }
   | { type: 'live_state'; state: LiveState }
-  | { type: 'auto_start_live' }
   | { type: 'live_audio'; pcm: ArrayBuffer; sampleRate: number }
   | { type: 'live_transcript'; role: 'user' | 'model'; text: string }
   | { type: 'widget'; id: string; widget: Widget; ttlMs: number }
@@ -54,7 +40,6 @@ export type RendererEvent =
     };
 
 export type AssistantApi = {
-  sendText: (text: string) => Promise<void>;
   liveStart: () => Promise<{ ok: boolean; reason?: string }>;
   liveStop: () => Promise<void>;
   liveSendAudio: (pcm16k: ArrayBuffer) => void;

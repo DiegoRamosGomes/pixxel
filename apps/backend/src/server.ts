@@ -97,7 +97,10 @@ function createSession(client: ConnectedClient, recovery: LiveRecoveryContext | 
       `\n\nDISPOSITIVO ATUAL: ${client.kind}.`,
     executeTool,
     sink: {
-      state: (state) => client.send({ type: 'voice_state', state }),
+      state: (state) => {
+        logger.info({ clientId: client.clientId, state: state.kind }, 'voice state');
+        client.send({ type: 'voice_state', state });
+      },
       audio: (pcm) => client.sendAudio(pcm),
       transcript: (role, text) => client.send({ type: 'transcript', role, text }),
       widget: (w) => client.send({ type: 'widget', ...w }),

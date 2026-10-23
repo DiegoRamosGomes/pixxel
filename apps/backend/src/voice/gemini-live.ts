@@ -248,6 +248,11 @@ export type GeminiLiveListeners = {
   onAudio: (pcm24kMono: Buffer) => void;
   onTranscript?: (text: string, role: 'user' | 'model') => void;
   onToolCall?: (call: ToolCall) => void;
+  /**
+   * Turno fechou sem áudio, sem texto e sem tool call. O modelo de áudio
+   * nativo faz isso de vez em quando com texto digitado (clientContent).
+   */
+  onEmptyTurn?: () => void;
 };
 
 export type GeminiLiveOptions = {
@@ -666,8 +671,15 @@ export class GeminiLiveClient {
     // do transcript do modelo aberto e a próxima resposta gruda na bolha
     // anterior.
     if (sc.interrupted || sc.turnComplete) {
+      const empty =
+        !sc.interrupted &&
+        !this.modelSpeaking &&
+        !this.currentModelText &&
+        this.currentModelToolCalls.length === 0;
+      if (empty) console.warn('[gemini-live] turno terminou vazio (sem áudio, texto ou tool call)');
       this.flushTurnToHistory();
       this.modelSpeaking = false;
+      if (empty) this.listeners.onEmptyTurn?.();
       this.setState({ kind: 'ready' });
     }
   }

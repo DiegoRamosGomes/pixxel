@@ -44,6 +44,10 @@ class FakeLive implements LiveClientLike {
   emitTranscript(text: string, role: 'user' | 'model') {
     this.listeners.onTranscript?.(text, role);
   }
+  emitEmptyTurn() {
+    this.listeners.onEmptyTurn?.();
+    this.listeners.onState({ kind: 'ready' });
+  }
 }
 
 let lives: FakeLive[];
@@ -230,5 +234,52 @@ describe('VoiceSession', () => {
     expect(lives[0].sendAudioChunk).toHaveBeenCalledWith(Buffer.from([1, 2]));
     lives[0].emitTranscript('oi', 'model');
     expect(sink.transcript).toHaveBeenCalledWith('model', 'oi');
+  });
+
+  it('texto digitado que volta em turno vazio é reenviado até duas vezes', async () => {
+    const s = make();
+    s.start();
+    lives[0].emitState({ kind: 'ready' });
+    s.sendText('Como está o clima hoje?');
+    lives[0].emitEmptyTurn();
+    expect(lives[0].sent).toEqual(['Como está o clima hoje?', 'Como está o clima hoje?']);
+    lives[0].emitEmptyTurn();
+    expect(lives[0].sent).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(lives[0].sent).toHaveLength(3);
+    lives[0].emitEmptyTurn();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(lives[0].sent).toHaveLength(3);
+  });
+
+  it('para de reenviar quando o modelo responde', async () => {
+    const s = make();
+    s.start();
+    lives[0].emitState({ kind: 'ready' });
+    s.sendText('Como está o clima hoje?');
+    lives[0].emitEmptyTurn();
+    lives[0].emitToolCall({ id: '1', name: 'weather', args: {} });
+    lives[0].emitEmptyTurn();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(lives[0].sent).toHaveLength(2);
+  });
+
+  it('não reenvia se o modelo respondeu', () => {
+    const s = make();
+    s.start();
+    lives[0].emitState({ kind: 'ready' });
+    s.sendText('oi');
+    lives[0].emitAudio(Buffer.alloc(2));
+    lives[0].emitEmptyTurn();
+    expect(lives[0].sent).toEqual(['oi']);
+  });
+
+  it('turno vazio sem texto digitado não reenvia nada', () => {
+    const s = make();
+    s.start();
+    lives[0].emitState({ kind: 'ready' });
+    s.sendInternal('[evento interno] build terminou');
+    lives[0].emitEmptyTurn();
+    expect(lives[0].sent).toEqual(['[evento interno] build terminou']);
   });
 });

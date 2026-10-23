@@ -69,6 +69,9 @@ const DEFAULT_RECONNECT_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 40_000, 60_00
 // poucos ms (paralelismo espúrio ou retry interno).
 const TOOL_DEDUP_MS = 1500;
 const STATE_CHECK_DELAY_MS = 4000;
+// Reenvio do texto digitado quando o Gemini devolve turno vazio: na hora e,
+// se vier vazio de novo, depois de 1 s.
+const EMPTY_TURN_RETRY_DELAYS_MS = [0, 1000];
 
 export class VoiceSession implements VoiceSessionHandle {
   private live: LiveClientLike | null = null;
@@ -81,6 +84,12 @@ export class VoiceSession implements VoiceSessionHandle {
   /** Cinta do briefing: no máximo 1 por conexão Live. */
   private briefingHandled = false;
   private pendingStateCheck: NodeJS.Timeout | null = null;
+  /**
+   * Último texto digitado ainda sem resposta. O modelo de áudio nativo às
+   * vezes fecha o turno com 1 token e nada mais; reenviamos até
+   * EMPTY_TURN_RETRY_DELAYS_MS.length vezes.
+   */
+  private retry: { text: string; attempts: number } | null = null;
   private lastCurrentWorkStatusAtMs = 0;
   private readonly delays: number[];
 
@@ -102,6 +111,7 @@ export class VoiceSession implements VoiceSessionHandle {
 
   stop(): void {
     this.desired = false;
+    this.retry = null;
     this.cancelReconnect();
     this.clearStateCheck();
     const old = this.live;
@@ -114,6 +124,7 @@ export class VoiceSession implements VoiceSessionHandle {
 
   detach(): LiveRecoveryContext | null {
     this.desired = false;
+    this.retry = null;
     this.cancelReconnect();
     this.clearStateCheck();
     const old = this.live;
@@ -142,10 +153,14 @@ export class VoiceSession implements VoiceSessionHandle {
 
   sendText(text: string): boolean {
     this.deps.onUserActivity?.();
-    return this.live?.sendText(text) ?? false;
+    const sent = this.live?.sendText(text) ?? false;
+    this.retry = sent ? { text, attempts: 0 } : null;
+    console.log(`[voice] texto do usuário (${sent ? 'enviado' : 'NÃO enviado'}): "${text.slice(0, 80)}"`);
+    return sent;
   }
 
   sendInternal(text: string): boolean {
+    this.retry = null;
     return this.live?.sendText(text) ?? false;
   }
 
@@ -182,6 +197,7 @@ export class VoiceSession implements VoiceSessionHandle {
       },
       onAudio: (pcm) => {
         if (!isCurrent()) return;
+        this.retry = null;
         for (const w of pendingWidgets.splice(0)) this.deps.sink.widget(w);
         this.deps.sink.audio(pcm);
       },
@@ -195,8 +211,27 @@ export class VoiceSession implements VoiceSessionHandle {
       },
       onToolCall: (call) => {
         if (!isCurrent()) return;
+        this.retry = null;
         void this.handleToolCall(client!, call, pendingWidgets, recentCalls);
       },
+    };
+
+    listeners.onEmptyTurn = () => {
+      const retry = this.retry;
+      if (!isCurrent() || !retry) return;
+      if (retry.attempts >= EMPTY_TURN_RETRY_DELAYS_MS.length) {
+        console.warn(`[voice] turno vazio de novo — desistindo de "${retry.text.slice(0, 60)}"`);
+        this.retry = null;
+        return;
+      }
+      const delay = EMPTY_TURN_RETRY_DELAYS_MS[retry.attempts];
+      retry.attempts += 1;
+      console.warn(`[voice] turno vazio do Gemini — reenviando (${retry.attempts}): "${retry.text.slice(0, 60)}"`);
+      const resend = (): void => {
+        if (isCurrent() && this.retry === retry) client!.sendText(retry.text);
+      };
+      if (delay > 0) setTimeout(resend, delay);
+      else resend();
     };
 
     const recovery = this.recovery;
@@ -293,12 +328,18 @@ export class VoiceSession implements VoiceSessionHandle {
       this.clearStateCheck();
     }
 
+    console.log(`[voice] tool call: ${call.name} ${JSON.stringify(call.args)}`);
+    const startedAt = Date.now();
     let out: ToolOutcome;
     try {
       out = await this.deps.executeTool(call);
     } catch (err) {
       out = { response: { ok: false, reason: err instanceof Error ? err.message : String(err) }, widgets: [] };
     }
+    console.log(
+      `[voice] tool ${call.name} → ok=${String(out.response.ok)} em ${Date.now() - startedAt}ms` +
+        (out.response.ok ? '' : ` (${String(out.response.reason)})`),
+    );
 
     if (call.name === 'morning_briefing' && out.response.ok === true) this.briefingHandled = true;
 

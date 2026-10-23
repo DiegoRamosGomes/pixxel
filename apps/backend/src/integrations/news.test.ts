@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseRss } from './news.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchNews, parseRss, pickNews, type FeedItem, type NewsFeeds } from './news.js';
 
 const wrap = (items: string) =>
   `<?xml version="1.0"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Feed</title>${items}</channel></rss>`;
@@ -82,5 +82,161 @@ describe('parseRss', () => {
     expect(parseRss('', 'g1')).toEqual([]);
     expect(parseRss('<rss><channel><item><title>sem fim', 'g1')).toEqual([]);
     expect(parseRss('não é xml', 'g1')).toEqual([]);
+  });
+});
+
+const NOW = new Date('2026-10-23T12:00:00Z');
+const ago = (h: number) => new Date(NOW.getTime() - h * 3600_000);
+const item = (over: Partial<FeedItem> & { title: string; url: string }): FeedItem => ({
+  summary: 'resumo',
+  publishedAt: ago(1),
+  source: 'g1',
+  ...over,
+});
+const feeds = (over: Partial<NewsFeeds> = {}): NewsFeeds => ({
+  mundo: [],
+  economia: [],
+  tecnologia: [],
+  tecnologiaReserva: [],
+  ...over,
+});
+
+describe('pickNews', () => {
+  it('PHP vence produto', () => {
+    const result = pickNews(
+      feeds({
+        tecnologia: [
+          item({ title: 'Brecha no PHP tira sites do ar', url: 'https://g1.globo.com/tecnologia/a', publishedAt: ago(3) }),
+          item({ title: 'Novo celular dobrável chega ao Brasil', url: 'https://g1.globo.com/tecnologia/b', publishedAt: ago(1) }),
+        ],
+      }),
+      NOW,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe('Brecha no PHP tira sites do ar');
+  });
+
+  it('oferta desce', () => {
+    const result = pickNews(
+      feeds({
+        tecnologia: [
+          item({ title: 'Ofertas tech: monitor com 40% OFF', url: 'https://g1.globo.com/tecnologia/a', publishedAt: ago(1) }),
+          item({ title: 'Apple lança chip', url: 'https://g1.globo.com/tecnologia/b', publishedAt: ago(5) }),
+        ],
+      }),
+      NOW,
+    );
+    expect(result[0].title).toBe('Apple lança chip');
+  });
+
+  it('sem repetida entre áreas', () => {
+    const php = item({ title: 'Brecha no PHP tira sites do ar', url: 'https://g1.globo.com/tecnologia/php' });
+    const result = pickNews(
+      feeds({
+        tecnologia: [php],
+        mundo: [php, item({ title: 'Cúpula termina', url: 'https://g1.globo.com/mundo/x', publishedAt: ago(2) })],
+        economia: [php, item({ title: 'Dólar fecha em queda', url: 'https://g1.globo.com/economia/y', publishedAt: ago(2) })],
+      }),
+      NOW,
+    );
+    expect(result.filter((n) => n.url === php.url).map((n) => n.area)).toEqual(['tecnologia']);
+    expect(result.map((n) => n.title)).toEqual([
+      'Cúpula termina',
+      'Brecha no PHP tira sites do ar',
+      'Dólar fecha em queda',
+    ]);
+  });
+
+  it('sem repetida por título normalizado', () => {
+    const result = pickNews(
+      feeds({
+        tecnologia: [item({ title: 'Brecha no PHP!', url: 'https://a.com/1' })],
+        mundo: [item({ title: 'brecha no php', url: 'https://b.com/2' })],
+      }),
+      NOW,
+    );
+    expect(result.map((n) => n.area)).toEqual(['tecnologia']);
+  });
+
+  it('editoria certa', () => {
+    const result = pickNews(
+      feeds({
+        economia: [
+          item({ title: 'Carro novo', url: 'https://g1.globo.com/carros/noticia/a', publishedAt: ago(1) }),
+          item({ title: 'Selic mantida', url: 'https://g1.globo.com/economia/noticia/b', publishedAt: ago(4) }),
+        ],
+      }),
+      NOW,
+    );
+    expect(result[0].url).toContain('/economia/');
+  });
+
+  it('janela', () => {
+    const old = (h: number) => [item({ title: 'Velha', url: 'https://g1.globo.com/mundo/a', publishedAt: ago(h) })];
+    expect(pickNews(feeds({ mundo: old(30) }), NOW).map((n) => n.area)).toEqual(['mundo']);
+    expect(pickNews(feeds({ mundo: old(60) }), NOW)).toEqual([]);
+  });
+
+  it('prefere a janela de 24 h quando há item nela', () => {
+    const result = pickNews(
+      feeds({
+        mundo: [
+          item({ title: 'Velha', url: 'https://g1.globo.com/mundo/a', publishedAt: ago(30), imageUrl: 'https://i/a.jpg' }),
+          item({ title: 'Nova', url: 'https://x.com/b', publishedAt: ago(20) }),
+        ],
+      }),
+      NOW,
+    );
+    expect(result[0].title).toBe('Nova');
+  });
+
+  it('reserva', () => {
+    const result = pickNews(
+      feeds({
+        tecnologiaReserva: [
+          item({ title: 'Do Olhar', url: 'https://olhardigital.com.br/a', source: 'Olhar Digital' }),
+        ],
+      }),
+      NOW,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ area: 'tecnologia', source: 'Olhar Digital' });
+  });
+
+  it('ordem de saída', () => {
+    const one = (n: string) => [item({ title: n, url: `https://x.com/${n}` })];
+    const result = pickNews(
+      feeds({ economia: one('e'), tecnologia: one('t'), mundo: one('m') }),
+      NOW,
+    );
+    expect(result.map((n) => n.area)).toEqual(['mundo', 'tecnologia', 'economia']);
+  });
+});
+
+describe('fetchNews', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('isola falha', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const xml = (path: string) =>
+      wrap(
+        `<item><title>Notícia ${path}</title><link>https://g1.globo.com/${path}/noticia/a</link><pubDate>Fri, 23 Oct 2026 10:00:00 +0000</pubDate></item>`,
+      );
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('/economia/')) throw new Error('rede caiu');
+      const path = u.includes('/mundo/') ? 'mundo' : 'tecnologia';
+      return new Response(xml(path), { status: 200 });
+    }) as typeof fetch;
+    const result = await fetchNews(NOW, fetchImpl);
+    expect(result.map((n) => n.area)).toEqual(['mundo', 'tecnologia']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[news]'), expect.anything());
+  });
+
+  it('resposta não OK vira feed vazio', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchImpl = (async () => new Response('erro', { status: 500 })) as typeof fetch;
+    expect(await fetchNews(NOW, fetchImpl)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(4);
   });
 });

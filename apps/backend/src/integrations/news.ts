@@ -2,6 +2,9 @@
 // que usamos (g1, Olhar Digital) são simples o bastante pra extração por regex
 // sobre blocos <item>…</item>.
 
+import { normalizeSpeech } from '@assistant/shared/briefing-cues';
+import type { NewsArea } from '@assistant/shared/widgets';
+
 export type FeedItem = {
   title: string;
   url: string;
@@ -138,4 +141,159 @@ export function parseRss(xml: string, source: string): FeedItem[] {
     return [];
   }
   return items;
+}
+
+export type NewsItem = {
+  area: NewsArea;
+  title: string;
+  summary: string;
+  url: string;
+  imageUrl?: string;
+  source: string;
+  publishedAt: string;
+};
+
+export type NewsFeeds = {
+  mundo: FeedItem[];
+  economia: FeedItem[];
+  tecnologia: FeedItem[];
+  tecnologiaReserva: FeedItem[];
+};
+
+export const NEWS_FETCH_TIMEOUT_MS = 3500;
+
+const HOUR_MS = 3600_000;
+
+// Ordem de escolha (tira repetidas) e ordem de saída (a do briefing).
+const PICK_ORDER: NewsArea[] = ['tecnologia', 'economia', 'mundo'];
+const OUTPUT_ORDER: NewsArea[] = ['mundo', 'tecnologia', 'economia'];
+
+// Termos já normalizados (sem acento, minúsculos); casam como palavra inteira,
+// aceitando plural simples ("falhas", "hackers").
+const TECH_RELEVANT = [
+  // segurança
+  'vulnerabilidade', 'falha', 'brecha', 'hacker', 'ataque hacker', 'ciberataque',
+  'vazamento', 'ransomware', 'malware', 'seguranca',
+  // desenvolvimento
+  'programacao', 'desenvolvedor', 'linguagem', 'framework', 'codigo aberto',
+  'github', 'linux', 'php', 'javascript', 'python',
+  // IA
+  'ia', 'inteligencia artificial', 'openai', 'chatgpt', 'gemini',
+].map((t) => new RegExp(`(?:^| )${t}s?(?: |$)`));
+
+const TECH_PROMO = ['oferta', 'promocao', 'desconto', 'cupom', 'black friday', 'imperdivel'].map(
+  (t) => new RegExp(`(?:^| )${t}(?:s|ao|oes)?(?: |$)`),
+);
+
+function techScore(title: string): number {
+  const norm = normalizeSpeech(title);
+  let score = 0;
+  if (TECH_RELEVANT.some((re) => re.test(norm))) score += 3;
+  if (/%\s*off/i.test(title) || TECH_PROMO.some((re) => re.test(norm))) score -= 5;
+  return score;
+}
+
+function score(area: NewsArea, item: FeedItem): number {
+  let s = 0;
+  if (item.url.includes(`/${area}/`)) s += 2;
+  if (item.imageUrl) s += 1;
+  if (area === 'tecnologia') s += techScore(item.title);
+  return s;
+}
+
+/** Itens com data dentro da janela; 24 h, e só se não houver nenhum, 48 h. */
+function inWindow(items: FeedItem[], now: Date): FeedItem[] {
+  for (const hours of [24, 48]) {
+    const found = items.filter((i) => {
+      if (!i.publishedAt) return false;
+      const age = now.getTime() - i.publishedAt.getTime();
+      return age <= hours * HOUR_MS;
+    });
+    if (found.length) return found;
+  }
+  return [];
+}
+
+/** Maior pontuação vence; empate vai para o mais recente. */
+function best(area: NewsArea, items: FeedItem[]): FeedItem | undefined {
+  let top: FeedItem | undefined;
+  let topScore = -Infinity;
+  for (const item of items) {
+    const s = score(area, item);
+    const newer = top && item.publishedAt!.getTime() > top.publishedAt!.getTime();
+    if (s > topScore || (s === topScore && newer)) {
+      top = item;
+      topScore = s;
+    }
+  }
+  return top;
+}
+
+export function pickNews(feeds: NewsFeeds, now: Date): NewsItem[] {
+  const usedUrls = new Set<string>();
+  const usedTitles = new Set<string>();
+  const picked = new Map<NewsArea, NewsItem>();
+
+  for (const area of PICK_ORDER) {
+    const fresh = (items: FeedItem[]) =>
+      inWindow(items, now).filter(
+        (i) => !usedUrls.has(i.url) && !usedTitles.has(normalizeSpeech(i.title)),
+      );
+    let candidates = fresh(feeds[area]);
+    // A reserva só entra se a tecnologia não tiver candidato.
+    if (area === 'tecnologia' && candidates.length === 0) candidates = fresh(feeds.tecnologiaReserva);
+    const choice = best(area, candidates);
+    if (!choice) continue;
+    usedUrls.add(choice.url);
+    usedTitles.add(normalizeSpeech(choice.title));
+    picked.set(area, {
+      area,
+      title: choice.title,
+      summary: choice.summary,
+      url: choice.url,
+      imageUrl: choice.imageUrl,
+      source: choice.source,
+      publishedAt: choice.publishedAt!.toISOString(),
+    });
+  }
+
+  return OUTPUT_ORDER.flatMap((area) => {
+    const n = picked.get(area);
+    return n ? [n] : [];
+  });
+}
+
+const FEED_URLS = {
+  mundo: 'https://g1.globo.com/rss/g1/mundo/',
+  economia: 'https://g1.globo.com/rss/g1/economia/',
+  tecnologia: 'https://g1.globo.com/rss/g1/tecnologia/',
+  tecnologiaReserva: 'https://olhardigital.com.br/feed/',
+} as const;
+
+/** Busca um feed; erro ou resposta ruim vira lista vazia (nunca lança). */
+async function fetchFeed(url: string, source: string, fetchImpl: typeof fetch): Promise<FeedItem[]> {
+  try {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(NEWS_FETCH_TIMEOUT_MS) });
+    if (!res.ok) {
+      console.warn(`[news] ${url} respondeu ${res.status}`);
+      return [];
+    }
+    return parseRss(await res.text(), source);
+  } catch (err) {
+    console.warn(`[news] falha ao ler ${url}`, err);
+    return [];
+  }
+}
+
+export async function fetchNews(
+  now: Date = new Date(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<NewsItem[]> {
+  const [mundo, economia, tecnologia, tecnologiaReserva] = await Promise.all([
+    fetchFeed(FEED_URLS.mundo, 'g1', fetchImpl),
+    fetchFeed(FEED_URLS.economia, 'g1', fetchImpl),
+    fetchFeed(FEED_URLS.tecnologia, 'g1', fetchImpl),
+    fetchFeed(FEED_URLS.tecnologiaReserva, 'Olhar Digital', fetchImpl),
+  ]);
+  return pickNews({ mundo, economia, tecnologia, tecnologiaReserva }, now);
 }

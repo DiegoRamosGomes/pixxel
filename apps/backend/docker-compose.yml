@@ -22,14 +22,16 @@ services:
       - email-watcher_default
     volumes:
       - ./data:/app/data
+    # Todas as chaves (CLIENT_TOKEN, GEMINI_API_KEY, Trello, ClickUp, Gmail...)
+    # vêm do .env ao lado do compose — ver apps/backend/.env.example.
+    env_file: .env
     environment:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
       - DB_PATH=/app/data/pixxel.db
+      - PIXXEL_DATA_DIR=/app/data/pixxel
       - LOG_LEVEL=info
-      - CLIENT_TOKEN=${CLIENT_TOKEN}
-      - EXPO_WEBHOOK_SECRET=${EXPO_WEBHOOK_SECRET}
 
 networks:
   email-watcher_default:

@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/.env
+apps/desktop
+apps/mobile
+docs
+.git
+.superpowers
+.remember

@@ -5,7 +5,7 @@
 # pra src/index.ts), então tsx resolve TypeScript em runtime — funciona com
 # qualquer estrutura de workspace sem precisar emitir dist/.
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /workspace
 
@@ -22,11 +22,13 @@ RUN npm ci --workspaces --include-workspace-root --ignore-scripts \
  && npm rebuild better-sqlite3 --build-from-source
 
 # ===== Runtime =====
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache tini
+# tini = init pid 1. procps = `ps` GNU (o BusyBox não tem as flags que as
+# métricas do servidor usam pra listar processos).
+RUN apk add --no-cache tini procps
 
 # Copia node_modules (com tsx + better-sqlite3 já compilado), packages, backend
 # e os configs de workspace que tsx precisa pra resolver os imports.
@@ -45,6 +47,9 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 ENV DB_PATH=/app/data/pixxel.db
+# Memória, planos de estudo, registros e estado das integrações (migrar a
+# ~/pixxel antiga pra ./data/pixxel no host).
+ENV PIXXEL_DATA_DIR=/app/data/pixxel
 
 WORKDIR /app/apps/backend
 

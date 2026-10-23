@@ -6,7 +6,15 @@ import { LOCAL_OPS, type LocalOp, type LocalToolResult } from '@assistant/shared
 import type { RendererEvent } from '../../shared/ipc.js';
 import { openApp, openUrl } from './apps.js';
 import { mediaControl, MEDIA_OPS, type MediaOp } from './media.js';
-import { clickMouse, doubleClickMouse, keyPress, moveMouse, typeText, type MouseUnit } from './input.js';
+import {
+  clickMouse,
+  doubleClickMouse,
+  inputUnavailableReason,
+  keyPress,
+  moveMouse,
+  typeText,
+  type MouseUnit,
+} from './input.js';
 import { openProject } from './projects.js';
 import { restartWifi } from './wifi.js';
 import { requestFrame } from './camera.js';
@@ -43,6 +51,8 @@ const PANELS = {
 const RESTART_DELAY_MS = 1500;
 
 async function inputOp(action: () => Promise<void>, text: string): Promise<LocalToolResult> {
+  const unavailable = await inputUnavailableReason();
+  if (unavailable) return { ok: false, reason: unavailable };
   try {
     await action();
     return { ok: true, text };
@@ -116,7 +126,9 @@ export async function executeLocalOp(
       if (!r.ok) return { ok: false, reason: r.reason };
       const text = r.ssid
         ? `WiFi reiniciado, conectado em ${r.ssid}${r.signal != null ? ` (sinal ${r.signal}%)` : ''}.`
-        : 'WiFi reiniciado, mas ainda não reconectou — pode levar mais alguns segundos.';
+        : r.connected
+          ? 'WiFi reiniciado e reconectado.'
+          : 'WiFi reiniciado, mas ainda não reconectou — pode levar mais alguns segundos.';
       return { ok: true, text };
     }
 

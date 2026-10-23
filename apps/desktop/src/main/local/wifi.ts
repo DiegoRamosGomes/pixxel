@@ -1,8 +1,9 @@
-// Info da rede WiFi conectada (SSID + força do sinal). Linux via nmcli.
+// Info da rede WiFi conectada (SSID + força do sinal). Linux via nmcli; macOS via networksetup/ipconfig.
 // Polling lento (30s) — rede raramente muda.
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { parseIpconfigSsid, parseWifiDevice } from './darwin.js';
 
 const execAsync = promisify(exec);
 const POLL_MS = 30_000;
@@ -12,7 +13,7 @@ export type WifiInfo = {
   signal: number | null; // 0-100
 };
 
-async function readWifi(): Promise<WifiInfo> {
+async function readWifiLinux(): Promise<WifiInfo> {
   try {
     // LANG=C força output em inglês (active vira `yes`/`no`). Sem isso, em
     // sistemas pt-BR vem `sim`/`não` e o parse quebra.
@@ -39,12 +40,71 @@ async function readWifi(): Promise<WifiInfo> {
 }
 
 export type WifiRestartResult =
-  | { ok: true; ssid: string | null; signal: number | null }
+  | { ok: true; ssid: string | null; signal: number | null; connected?: boolean }
   | { ok: false; reason: string };
+
+// ===== macOS =====
+// SSID vem de `ipconfig getsummary` — sem permissão de localização o macOS
+// devolve `<redacted>`, aí fica null. Força do sinal não é exposta: null.
+
+async function wifiDevice(): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync('networksetup -listallhardwareports', { timeout: 3000 });
+    return parseWifiDevice(stdout);
+  } catch {
+    return null;
+  }
+}
+
+async function readWifiDarwin(): Promise<WifiInfo> {
+  const dev = await wifiDevice();
+  if (!dev) return { ssid: null, signal: null };
+  try {
+    const { stdout } = await execAsync(`ipconfig getsummary ${dev}`, { timeout: 3000 });
+    return { ssid: parseIpconfigSsid(stdout), signal: null };
+  } catch {
+    return { ssid: null, signal: null };
+  }
+}
+
+async function hasIp(dev: string): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(`ipconfig getifaddr ${dev}`, { timeout: 3000 });
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function restartWifiDarwin(): Promise<WifiRestartResult> {
+  const dev = await wifiDevice();
+  if (!dev) return { ok: false, reason: 'não achei a interface Wi-Fi' };
+  try {
+    await execAsync(`networksetup -setairportpower ${dev} off`, { timeout: 5000 });
+    await new Promise((r) => setTimeout(r, 2000));
+    await execAsync(`networksetup -setairportpower ${dev} on`, { timeout: 5000 });
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'networksetup falhou' };
+  }
+  // Aguarda pegar IP de novo (até 15s).
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (await hasIp(dev)) {
+      const w = await readWifiDarwin();
+      return { ok: true, ssid: w.ssid, signal: null, connected: true };
+    }
+  }
+  return { ok: true, ssid: null, signal: null, connected: false };
+}
+
+function readWifi(): Promise<WifiInfo> {
+  return process.platform === 'darwin' ? readWifiDarwin() : readWifiLinux();
+}
 
 // Reinicia o rádio WiFi via nmcli (off → on). Não precisa sudo no Ubuntu padrão
 // quando NetworkManager está rodando como serviço do sistema.
 export async function restartWifi(): Promise<WifiRestartResult> {
+  if (process.platform === 'darwin') return restartWifiDarwin();
   try {
     await execAsync('nmcli radio wifi off', { timeout: 5000 });
     await new Promise((r) => setTimeout(r, 2000));

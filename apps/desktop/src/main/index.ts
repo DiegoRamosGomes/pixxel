@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { app, BrowserWindow, Menu, globalShortcut, ipcMain, session } from 'electron';
+import { app, BrowserWindow, Menu, globalShortcut, ipcMain, session, systemPreferences } from 'electron';
 import { hostname } from 'node:os';
 import { join, resolve as pathResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { executeLocalOp, supportedLocalOps } from './local/index.js';
 import { deliverFrame } from './local/camera.js';
 import { startWifiPoll } from './local/wifi.js';
 import {
-  isXdotoolAvailable,
+  handMouseAvailable,
   getScreenSize as getHandMouseScreenSize,
   moveMouseFast,
   clickMouseFast,
@@ -102,6 +102,14 @@ function createWindow(): void {
 app.whenReady().then(() => {
   if (!CLIENT_TOKEN) console.error('CLIENT_TOKEN missing in .env');
 
+  if (process.platform === 'darwin') {
+    // macOS pede microfone e câmera ao processo; e Acessibilidade pra mouse,
+    // teclado e teclas de mídia (em dev vai pro app que abriu o terminal).
+    void systemPreferences.askForMediaAccess('microphone');
+    void systemPreferences.askForMediaAccess('camera');
+    systemPreferences.isTrustedAccessibilityClient(true);
+  }
+
   // Esc global = aborta apresentação em curso na API (que ignora se não houver).
   try {
     globalShortcut.register('Escape', () => api?.abortPresentation());
@@ -172,8 +180,8 @@ app.whenReady().then(() => {
 
   // ===== Hand-mouse (controle do cursor por gestos) =====
   ipcMain.handle('assistant:hand-mouse-enable', async () => {
-    const has = await isXdotoolAvailable();
-    if (!has) return { ok: false, reason: 'xdotool não instalado' };
+    const r = await handMouseAvailable();
+    if (!r.ok) return r;
     return { ok: true, screen: getHandMouseScreenSize() };
   });
   ipcMain.handle('assistant:hand-mouse-disable', () => {

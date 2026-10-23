@@ -1,8 +1,10 @@
 // Controle de mídia (play/pause/próxima) do player que estiver tocando.
 // Linux: playerctl (MPRIS) com fallback de tecla de mídia via xdotool.
+// macOS: tecla de mídia do sistema via JXA (osascript).
 
 import { spawn } from 'node:child_process';
 import type { LocalToolResult } from '@assistant/shared';
+import { mediaKeyScript } from './darwin.js';
 
 export const MEDIA_OPS = ['play', 'pause', 'play_pause', 'stop', 'next', 'previous'] as const;
 export type MediaOp = (typeof MEDIA_OPS)[number];
@@ -67,6 +69,13 @@ async function mediaControlLinux(op: MediaOp): Promise<LocalToolResult> {
   return { ok: false, reason: `Falhou nas duas vias — ${playerctlMsg}; ${xdotoolMsg}.` };
 }
 
+async function mediaControlDarwin(op: MediaOp): Promise<LocalToolResult> {
+  // A tecla de mídia do macOS só tem play/pause (toggle), próxima e anterior.
+  const key = op === 'next' ? 'next' : op === 'previous' ? 'previous' : 'play_pause';
+  const r = await runCommand('osascript', ['-l', 'JavaScript', '-e', mediaKeyScript(key)]);
+  return r.ok ? { ok: true } : { ok: false, reason: `tecla de mídia falhou: ${r.reason}` };
+}
+
 export async function mediaControl(op: MediaOp): Promise<LocalToolResult> {
-  return mediaControlLinux(op);
+  return process.platform === 'darwin' ? mediaControlDarwin(op) : mediaControlLinux(op);
 }

@@ -50,10 +50,8 @@ import { resolve as pathResolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Widget } from '../shared/widgets.js';
 import { MemoryVault, type MemoryType } from './memory.js';
-import { startSystemMetrics } from './system-metrics.js';
-import { startTopProcesses } from './top-processes.js';
+import { startNetworkPoll, startSystemMetrics, startTopProcesses } from '@assistant/metrics';
 import { startWifiPoll } from './wifi.js';
-import { startNetworkPoll } from './network.js';
 import { startEmailPoller } from './integrations/email/poller.js';
 import {
   backfillEmails,

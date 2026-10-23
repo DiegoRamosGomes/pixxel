@@ -15,7 +15,7 @@ import {
   type ClickupTask,
 } from './clickup.js';
 import { getActiveWorkStore, formatRelativeAge } from './active-work.js';
-import { getStorageStatus, type DiskInfo } from './storage.js';
+import { getStorageStatus, type DiskInfo } from '@assistant/metrics';
 import type { Widget, StorageWidget } from '../../shared/widgets.js';
 
 const STATE_DIR = join(homedir(), 'pixxel', 'state');

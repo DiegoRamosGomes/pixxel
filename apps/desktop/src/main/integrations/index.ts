@@ -103,7 +103,7 @@ function deriveStatusForDisplay(e: WorkEntry): string {
   if (s === 'paused') return 'pausada';
   return 'em andamento';
 }
-import { getStorageStatus } from './storage.js';
+import { getStorageStatus } from '@assistant/metrics';
 import { restartWifi } from '../wifi.js';
 import {
   backfillEmails,

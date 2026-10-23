@@ -16,9 +16,8 @@ apps/backend/data/*.db-shm
 # Electron
 apps/desktop/release
 
-# Whisper / Piper resources (binários e modelos podem ser grandes)
+# Whisper resources (binários e modelos podem ser grandes)
 apps/desktop/resources/whisper/*.bin
-# Piper: ignora todo binário/modelo do dir, mantém só docs (README.md)
-apps/desktop/resources/piper/*
-!apps/desktop/resources/piper/README.md
 apps/desktop/resources/porcupine/*.ppn
+# Restos locais do Piper (TTS removido) — binários de até centenas de MB
+apps/desktop/resources/piper/

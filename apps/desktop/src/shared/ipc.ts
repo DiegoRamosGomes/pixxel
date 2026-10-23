@@ -5,67 +5,6 @@ export type { Widget } from './widgets.js';
 
 export type ConnState = 'connecting' | 'open' | 'closed' | 'error';
 
-export type ClaudeSessionStatus =
-  | 'running'
-  | 'done'
-  | 'paused'
-  | 'crashed'
-  | 'failed'
-  | 'awaiting_approval'
-  | 'awaiting_user_input';
-
-export interface ClaudeQuestionOption {
-  label: string;
-  description?: string;
-}
-
-export interface ClaudeQuestion {
-  questionId: string;
-  question: string;
-  options: ClaudeQuestionOption[];
-}
-
-export interface ClaudeSessionView {
-  sessionId: string;
-  cwd: string;
-  project: string | null;
-  taskDescription: string;
-  status: ClaudeSessionStatus;
-  createdAt: string;
-  updatedAt: string;
-  complexity?: number;
-}
-
-export interface ClaudeSessionChunk {
-  kind: 'assistant' | 'tool_use' | 'tool_result' | 'system' | 'error';
-  text: string;
-  tool?: string;
-}
-
-export interface ClaudeQuotaSnapshot {
-  session: {
-    totalTokens: number;
-    costUSD: number;
-    tokenLimit: number;
-    projectedTokens: number;
-    /** Gasto ATUAL: totalTokens / tokenLimit. */
-    actualPct: number;
-    /** Projeção: projectedTokens / tokenLimit. Base dos alertas. */
-    pctOfLimit: number;
-    burnRate: { tokensPerMinute: number; costPerHour: number } | null;
-    projection: { totalCost: number } | null;
-    remainingMinutes: number | null;
-    startTime: string | null;
-    endTime: string | null;
-  };
-  weekly: {
-    totalCostUSD: number;
-    totalTokens: number;
-  };
-  status: 'ok' | 'warn' | 'critical';
-  lastUpdated: string;
-}
-
 export type LiveState =
   | { kind: 'idle' }
   | { kind: 'unavailable'; reason: string }
@@ -89,8 +28,6 @@ export type RendererEvent =
       executed: { ok: boolean; reason?: string };
     }
   | { type: 'assistant_error'; code: string; message: string }
-  | { type: 'tts_state'; enabled: boolean; available: boolean }
-  | { type: 'tts_speaking'; speaking: boolean }
   | { type: 'live_state'; state: LiveState }
   | { type: 'auto_start_live' }
   | { type: 'live_audio'; pcm: ArrayBuffer; sampleRate: number }
@@ -120,35 +57,10 @@ export type RendererEvent =
       type: 'network_bw';
       rxBytesPerSec: number;
       txBytesPerSec: number;
-    }
-  | { type: 'claude_session_started'; session: ClaudeSessionView }
-  | { type: 'claude_session_chunk'; sessionId: string; chunk: ClaudeSessionChunk }
-  | { type: 'claude_session_status'; sessionId: string; status: ClaudeSessionStatus }
-  | { type: 'claude_session_done'; sessionId: string; ok: boolean; finalText: string; project: string | null; cancelled: boolean }
-  | { type: 'claude_session_plan_ready'; sessionId: string; project: string | null; plan: string }
-  | {
-      type: 'claude_session_question_ready';
-      sessionId: string;
-      project: string | null;
-      question: ClaudeQuestion;
-    }
-  | {
-      type: 'claude_session_permission_ready';
-      sessionId: string;
-      project: string | null;
-      permission: {
-        permissionId: string;
-        toolName: string;
-        toolInput: Record<string, unknown>;
-        toolUseId: string;
-      };
-    }
-  | { type: 'claude_sessions_snapshot'; sessions: ClaudeSessionView[] }
-  | { type: 'claude_quota_update'; quota: ClaudeQuotaSnapshot };
+    };
 
 export type AssistantApi = {
   sendText: (text: string) => Promise<void>;
-  toggleTts: () => Promise<{ enabled: boolean; available: boolean }>;
   liveStart: () => Promise<{ ok: boolean; reason?: string }>;
   liveStop: () => Promise<void>;
   liveSendAudio: (pcm16k: ArrayBuffer) => void;

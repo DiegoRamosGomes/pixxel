@@ -4,18 +4,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AssistantWsClient } from './ws-client.js';
 import type { RendererEvent } from '../shared/ipc.js';
-import { isTtsAvailable, TtsEngine } from './voice/tts.js';
-import { SentenceBuffer } from './voice/sentence-buffer.js';
 import { GeminiLiveClient } from './voice/gemini-live.js';
 import {
   ALL_TOOLS,
   UI_TOOL_NAMES,
   IDEAS_TOOL_NAMES,
-  CLAUDE_TOOL_NAMES,
 } from './voice/tool-declarations.js';
-import { getClaudeManager } from './claude/manager.js';
-import { buildAppendSystemPrompt } from './claude/system-prompt.js';
-import { getQuotaService } from './claude/quota.js';
 import { saveIdea } from './integrations/ideas.js';
 import {
   getStudyPlanStore,
@@ -23,7 +17,6 @@ import {
   applyKamilaCuratedVideos,
 } from './integrations/study-plans.js';
 import { getActiveWorkStore } from './integrations/active-work.js';
-import { findProject } from './integrations/projects.js';
 import { executeCommand } from './executor.js';
 import { executeIntegration, INTEGRATION_NAMES } from './integrations/index.js';
 import { deliverFrame, registerFrameRequester } from './integrations/vision.js';
@@ -113,8 +106,6 @@ const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL;
 let mainWindow: BrowserWindow | null = null;
 let wsClient: AssistantWsClient | null = null;
 let lastConn: RendererEvent | null = null;
-let tts: TtsEngine | null = null;
-let sentenceBuf: SentenceBuffer | null = null;
 let live: GeminiLiveClient | null = null;
 let memory: MemoryVault | null = null;
 // Reconnect automático do Gemini Live. `liveDesiredActive` reflete a intenção
@@ -135,9 +126,6 @@ let liveRecoveryContext: {
 // Cinta de segurança pro briefing: só roda uma vez por sessão Live, mesmo
 // que Gemini chame de novo por engano. Reset no live-start.
 let briefingHandledThisSession = false;
-// Mesma ideia: só avisa o Gemini sobre sessões Claude crashed uma vez por
-// conexão Live (não a cada reconnect). Reset no live-start.
-let crashedNotifiedThisLive = false;
 // Detecção de "Gemini hallucina sobre estado". Quando user transcript matchar
 // uma pergunta de estado, força chamada antecipada de current_work_status
 // se Gemini não chamou em 4s.
@@ -314,14 +302,6 @@ function createWindow(): void {
   }
 }
 
-function emitTtsState(): void {
-  emit({
-    type: 'tts_state',
-    enabled: tts?.isEnabled() ?? false,
-    available: isTtsAvailable(),
-  });
-}
-
 app.whenReady().then(async () => {
   if (!CLIENT_TOKEN) {
     console.error('CLIENT_TOKEN missing in .env');
@@ -358,121 +338,6 @@ app.whenReady().then(async () => {
   // Tracker de sessões de trabalho (start_work/end_work) — persistido em
   // ~/pixxel/active-work.json. Briefing matinal lê pra sugerir continuar.
   await getActiveWorkStore().load();
-
-  // Claude Code manager. Carrega ~/pixxel/sessions.json e reconcilia órfãs
-  // (running com pid morto → crashed). Snapshot vai pro renderer logo após
-  // a janela carregar (emit é noop até window existir).
-  const claudeManager = getClaudeManager();
-  await claudeManager.init();
-  claudeManager.on('session_started', (session) => {
-    emit({ type: 'claude_session_started', session });
-  });
-  claudeManager.on('session_chunk', (sessionId, chunk) => {
-    emit({ type: 'claude_session_chunk', sessionId, chunk });
-  });
-  claudeManager.on('session_status', (sessionId, status) => {
-    emit({ type: 'claude_session_status', sessionId, status });
-  });
-  claudeManager.on('session_done', (sessionId, ok, finalText, project, cancelled) => {
-    emit({ type: 'claude_session_done', sessionId, ok, finalText, project, cancelled });
-    // Injeta resultado de volta no Live pro Gemini comentar em 1ª pessoa.
-    // Cancelamento NÃO injeta — o handler do claude_cancel_task já confirma.
-    if (live && !cancelled) {
-      const projectLabel = project ? ` no projeto ${project}` : '';
-      const note = ok
-        ? `[Sistema] A tarefa de código${projectLabel} terminou. Resultado: ${finalText.slice(0, 1500)}. Confirme em 1ª pessoa, sem mencionar "Claude" nem agente externo.`
-        : `[Sistema] A tarefa de código${projectLabel} falhou. Avise em 1ª pessoa, sem mencionar "Claude".`;
-      live.sendText(note);
-    }
-  });
-  claudeManager.on('plan_ready', (sessionId, project, plan) => {
-    emit({ type: 'claude_session_plan_ready', sessionId, project, plan });
-    if (live) {
-      const projectLabel = project ? ` no projeto ${project}` : '';
-      const note =
-        `[Sistema] Plan-mode terminou${projectLabel}. Plano proposto:\n\n${plan.slice(0, 2000)}\n\n` +
-        `INSTRUÇÃO: fale o plano resumido por voz em 1ª pessoa ("o plano é: ...; ` +
-        `posso prosseguir?") e ESPERE resposta. NUNCA mencione "Claude" nem agente externo. ` +
-        `sessionId=${sessionId}. Se o usuário aprovar (sim/vai/aprova) → ` +
-        `claude_approve_plan(). Se rejeitar (não/deixa/rejeita) → claude_reject_plan().`;
-      live.sendText(note);
-    }
-  });
-  claudeManager.on('question_ready', (sessionId, project, question) => {
-    emit({ type: 'claude_session_question_ready', sessionId, project, question });
-    if (live) {
-      const projectLabel = project ? ` no projeto ${project}` : '';
-      const optsText = question.options
-        .map((o, i) => `${i + 1}) ${o.label}${o.description ? ' — ' + o.description : ''}`)
-        .join('\n');
-      const note =
-        `[Sistema] A tarefa de código${projectLabel} precisa de uma decisão sua. ` +
-        `Pergunta: "${question.question}"\nOpções:\n${optsText}\n\n` +
-        `INSTRUÇÃO: fale a pergunta + opções em 1ª pessoa de jeito curto e natural ` +
-        `(ex: "preciso decidir X. tenho 3 opções: A, B, C. qual prefere?"). ESPERE resposta. ` +
-        `Quando o usuário escolher, chame claude_answer_question(answer=<texto da escolha>). ` +
-        `Se ele disser "deixa pra lá" → claude_reject_question(). ` +
-        `NUNCA mencione "Claude" nem agente externo. sessionId=${sessionId}.`;
-      live.sendText(note);
-    }
-  });
-  claudeManager.on('permission_ready', (sessionId, project, permission) => {
-    emit({ type: 'claude_session_permission_ready', sessionId, project, permission });
-    if (live) {
-      const projectLabel = project ? ` no projeto ${project}` : '';
-      // Resumo curto do input pra falar — Bash mostra command, Edit mostra
-      // file_path, fallback: stringify cortado.
-      const t = permission.toolInput as Record<string, unknown>;
-      let summary = '';
-      if (permission.toolName === 'Bash' && typeof t.command === 'string') {
-        summary = `\`${t.command.slice(0, 200)}\``;
-      } else if (typeof t.file_path === 'string') {
-        summary = `arquivo ${t.file_path}`;
-      } else if (typeof t.path === 'string') {
-        summary = `arquivo ${t.path}`;
-      } else {
-        summary = JSON.stringify(t).slice(0, 200);
-      }
-      const note =
-        `[Sistema] A tarefa de código${projectLabel} precisa de permissão pra ` +
-        `executar a ferramenta "${permission.toolName}" com ${summary}. ` +
-        `A sessão está PAUSADA esperando sua decisão (não encerrou). ` +
-        `INSTRUÇÃO: pergunte ao usuário em 1ª pessoa de jeito curto e natural ` +
-        `(ex: "preciso rodar X, autoriza?"). ESPERE resposta. ` +
-        `Sim/pode/autoriza → claude_approve_permission(). ` +
-        `Não/recusa/cancela → claude_deny_permission(). ` +
-        `NUNCA mencione "Claude" nem agente externo. sessionId=${sessionId}.`;
-      live.sendText(note);
-    }
-  });
-  shutdownHandlers.push(() => {
-    void claudeManager.shutdown();
-  });
-
-  // Quota monitoring: ccusage polling 5min. Bloqueia novas tarefas em
-  // ≥95%, avisa por voz em ≥70%. Background, não bloqueia boot.
-  const quota = getQuotaService();
-  quota.on('update', (snapshot) => {
-    emit({ type: 'claude_quota_update', quota: snapshot });
-  });
-  quota.on('threshold', (status, snapshot) => {
-    if (!live?.isOpen()) return;
-    const actualPct = Math.round(snapshot.session.actualPct * 100);
-    const projPct = Math.round(snapshot.session.pctOfLimit * 100);
-    const minLeft = snapshot.session.remainingMinutes ?? null;
-    const resetLine = minLeft != null ? ` Reset em ${minLeft}min.` : '';
-    const note = status === 'critical'
-      ? `[Sistema] Quota crítica: gastei ${actualPct}%, projeção pro fim do bloco é ${projPct}%.${resetLine} ` +
-        `AVISE em 1ª pessoa que novas tarefas de código vão ser BLOQUEADAS. ` +
-        `Recomende esperar reset. NÃO mencione "Claude" — diga "minha quota de uso de código".`
-      : `[Sistema] Quota em alerta: gastei ${actualPct}%, projeção ${projPct}%.${resetLine} ` +
-        `AVISE em 1ª pessoa que tá próximo do limite (cite projeção, não gasto atual — ` +
-        `o alerta dispara baseado em projeção). Recomende finalizar pendentes antes de iniciar novas. ` +
-        `NÃO mencione "Claude" — diga "quota de código".`;
-    live.sendText(note);
-  });
-  void quota.start();
-  shutdownHandlers.push(() => quota.stop());
 
   // Esc global = aborta apresentação em curso. Não interfere quando demo não
   // está rodando — o handler só seta a flag, a demo lê e para.
@@ -632,27 +497,10 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  tts = new TtsEngine({
-    onSpeakingChange: (speaking) => emit({ type: 'tts_speaking', speaking }),
-  });
-  sentenceBuf = new SentenceBuffer();
-
   mainWindow?.webContents.on('did-finish-load', () => {
     console.log('[main] renderer ready, starting ws client');
     if (!wsClient) {
       wsClient = new AssistantWsClient(WS_URL, CLIENT_TOKEN, emit, {
-        onAssistantTextChunk: (delta) => {
-          if (!tts?.isEnabled()) return;
-          const sentences = sentenceBuf!.push(delta);
-          for (const s of sentences) tts!.enqueue(s);
-        },
-        onAssistantTextEnd: () => {
-          const tail = sentenceBuf!.flush();
-          if (tail && tts?.isEnabled()) tts.enqueue(tail);
-        },
-        onAssistantCommandLabel: (label) => {
-          if (tts?.isEnabled()) tts.enqueue(label);
-        },
         onWebhookEvent: (whEvent) => {
           handleWebhookEvent(whEvent);
         },
@@ -661,19 +509,12 @@ app.whenReady().then(async () => {
     } else if (lastConn) {
       mainWindow?.webContents.send('assistant:event', lastConn);
     }
-    emitTtsState();
     // Estado inicial do projeto ativo pra UI mostrar a label antes mesmo
     // de qualquer interação.
     emit({
       type: 'active_project',
       path: activeProjectCwd,
       name: activeProjectName,
-    });
-    // Snapshot inicial das sessões Claude (paused/crashed/awaiting_approval)
-    // pra UI mostrar widgets carregados de sessões anteriores.
-    emit({
-      type: 'claude_sessions_snapshot',
-      sessions: claudeManager.snapshot(),
     });
     // Pós-restart via tool restart_app: religa a Live sozinho. Aceita
     // sinal via argv (modo packageado) OU env (modo dev — o argv não
@@ -802,18 +643,6 @@ app.whenReady().then(async () => {
     else mainWindow.maximize();
   });
 
-  ipcMain.handle('assistant:toggle-tts', () => {
-    if (!tts) return { enabled: false, available: false };
-    if (!isTtsAvailable()) {
-      return { enabled: false, available: false };
-    }
-    tts.setEnabled(!tts.isEnabled());
-    sentenceBuf?.reset();
-    const next = { enabled: tts.isEnabled(), available: true };
-    emit({ type: 'tts_state', ...next });
-    return next;
-  });
-
   function scheduleLiveReconnect(): void {
     if (liveReconnectTimer) return; // já agendado
     if (!liveDesiredActive) return;
@@ -865,7 +694,6 @@ app.whenReady().then(async () => {
     }
     // Reset da cinta do briefing — nova sessão pode ter briefing de novo.
     briefingHandledThisSession = false;
-    crashedNotifiedThisLive = false;
     // Widgets ficam pendentes até o primeiro chunk de áudio depois da tool call,
     // pra aparecerem em sincronia com a fala (não na hora que a integração
     // termina, que pode ser bem antes).
@@ -896,40 +724,6 @@ app.whenReady().then(async () => {
             // Flush das falas de webhook que chegaram durante boot/reconnect.
             // Pequeno delay pra dar prioridade pro briefing matinal se houver.
             setTimeout(() => flushPendingWebhookPhrases(), 500);
-            // Sessões retomáveis (paused/crashed) — só avisa uma vez por
-            // conexão Live (não a cada reconnect dentro da mesma sessão).
-            if (!crashedNotifiedThisLive) {
-              const resumable = claudeManager.resumable();
-              if (resumable.length > 0) {
-                crashedNotifiedThisLive = true;
-                setTimeout(() => {
-                  if (!live?.isOpen()) return;
-                  const paused = resumable.filter((s) => s.status === 'paused');
-                  const crashed = resumable.filter((s) => s.status === 'crashed');
-                  const buckets: string[] = [];
-                  if (paused.length > 0) {
-                    const list = paused
-                      .map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 80)}")`)
-                      .join('; ');
-                    buckets.push(`${paused.length} pausada(s) (você cancelou no meio): ${list}`);
-                  }
-                  if (crashed.length > 0) {
-                    const list = crashed
-                      .map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 80)}")`)
-                      .join('; ');
-                    buckets.push(`${crashed.length} caída(s) (processo morreu): ${list}`);
-                  }
-                  live.sendText(
-                    `[Sistema] Tarefa(s) de código pendente(s) de sessões anteriores: ` +
-                    buckets.join('. ') + '. ' +
-                    `INSTRUÇÃO: avise em 1ª pessoa e PERGUNTE se quer retomar de onde parou. ` +
-                    `Sim/retoma/continua → claude_resume_crashed(). Não/deixa pra lá → ` +
-                    `claude_dismiss_crashed(). Se forem várias, ofereça "todas" ou específica. ` +
-                    `NUNCA mencione "Claude" nem agente externo.`,
-                  );
-                }, 1500);
-              }
-            }
             // Briefing automático na primeira conexão Live do dia.
             // Verifica disco antes de disparar pra evitar duplicação se o user
             // já pediu manualmente nessa sessão.
@@ -1287,599 +1081,6 @@ app.whenReady().then(async () => {
             }
           }
 
-          // Caminho 0.7: Claude Code task — assíncrono. Dispara no background,
-          // retorna ack curto pro Gemini. Resultado vem por sendText quando termina.
-          if (CLAUDE_TOOL_NAMES.has(call.name)) {
-            if (call.name === 'claude_code_task') {
-              const task = typeof call.args.task === 'string' ? call.args.task.trim() : '';
-              const projectArg = typeof call.args.project === 'string' ? call.args.project.trim() : '';
-              if (!task) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'task obrigatória',
-                });
-                return;
-              }
-              let cwd = activeProjectCwd;
-              let projectName = activeProjectName;
-              if (projectArg) {
-                const found = findProject(projectArg);
-                if (found.ok) {
-                  cwd = found.project.path;
-                  projectName = found.project.name;
-                  setActiveProject(found.project.path, found.project.name);
-                } else {
-                  const altText = found.alternatives?.length
-                    ? ` Candidatos: ${found.alternatives.map((a) => a.name).join(', ')}`
-                    : '';
-                  live?.sendToolResponse(call.id, call.name, {
-                    ok: false,
-                    reason: `${found.reason}${altText}`,
-                  });
-                  return;
-                }
-              }
-              const complexityRaw = typeof call.args.complexity === 'number'
-                ? call.args.complexity
-                : Number(call.args.complexity);
-              const complexity = Number.isFinite(complexityRaw)
-                ? Math.min(10, Math.max(1, Math.round(complexityRaw)))
-                : 5;
-              const appendSystemPrompt = memory
-                ? buildAppendSystemPrompt(memory, cwd)
-                : undefined;
-              const result = await claudeManager.start({
-                task,
-                cwd,
-                project: projectName,
-                complexity,
-                appendSystemPrompt,
-              });
-              const projLabel = projectName ?? '(default)';
-              if (result.ok && result.queued) {
-                const modeLabel = result.mode === 'plan' ? 'plan-mode (vou planejar antes)' : 'execute';
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  queued: true,
-                  position: result.position,
-                  mode: result.mode,
-                  text: `Enfileirado em ${modeLabel} no projeto ${projLabel} (posição ${result.position}). Já tem 3 rodando.`,
-                  _note:
-                    'Avise em 1ª pessoa que vai enfileirar e cite a posição. ' +
-                    (result.mode === 'plan'
-                      ? 'Mencione que essa tarefa vai passar por plano antes de executar (complexity ≥ 7). '
-                      : '') +
-                    'Não mencione "Claude" nem agente externo.',
-                });
-              } else if (result.ok) {
-                if (result.mode === 'plan') {
-                  live?.sendToolResponse(call.id, call.name, {
-                    ok: true,
-                    mode: 'plan',
-                    text: `Iniciei planejamento no projeto ${projLabel} (tarefa complexa). Vou te mostrar o plano antes de executar.`,
-                    _note:
-                      'Avise em 1ª pessoa que vai PLANEJAR primeiro porque a tarefa é complexa, ' +
-                      'e que vai apresentar o plano em alguns segundos pra aprovação. ' +
-                      'NÃO mencione "Claude" nem agente externo.',
-                  });
-                } else {
-                  live?.sendToolResponse(call.id, call.name, {
-                    ok: true,
-                    mode: 'execute',
-                    text: `Disparado em background no projeto ${projLabel}.`,
-                    _note:
-                      'A tarefa roda async. Confirme em 1ª pessoa o que vai fazer ' +
-                      '(ex: "vou ajustar o botão"), sem mencionar "Claude" nem agente externo.',
-                  });
-                }
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: result.reason,
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_approve_plan') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.approvePlan(targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Aprovado. Executando o plano no projeto ${r.session.project ?? '(default)'}.`,
-                  _note:
-                    'Confirme em 1ª pessoa que aprovou e tá executando agora. ' +
-                    'Não mencione "Claude". O resultado virá depois via sistema.',
-                });
-              } else if (r.reason === 'no_awaiting') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_awaiting',
-                  text: 'Não tem nenhum plano aguardando aprovação.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  awaiting: r.awaiting,
-                  text: `Tem ${(r.awaiting ?? []).length} planos aguardando: ${list}. Pergunte qual aprovar.`,
-                  _note:
-                    'Liste os projetos pro usuário em 1ª pessoa e espere a resposta. ' +
-                    'Quando ele disser, chame de novo com target=<nome>.',
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: r.reason,
-                  text: `Não consegui aprovar: ${r.detail ?? r.reason}.`,
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_answer_question') {
-              const answer = typeof call.args.answer === 'string' ? call.args.answer.trim() : '';
-              if (!answer) {
-                live?.sendToolResponse(call.id, call.name, { ok: false, reason: 'answer obrigatória' });
-                return;
-              }
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.answerQuestion(answer, targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Respondi "${answer.slice(0, 60)}" pra tarefa do projeto ${r.session.project ?? '(default)'}.`,
-                  _note: 'Confirme em 1ª pessoa que respondeu e que vai continuar. Não mencione "Claude".',
-                });
-              } else if (r.reason === 'no_question') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_question',
-                  text: 'Não tem pergunta pendente pra responder.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.questions ?? []).map((q) => q.session.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  questions: r.questions,
-                  text: `Tem ${(r.questions ?? []).length} perguntas pendentes (${list}). Pergunte qual responder.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, { ok: false, reason: r.reason ?? 'not_found' });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_approve_permission') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.approvePermission(targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Autorizado. Continuando a tarefa no projeto ${r.session.project ?? '(default)'}.`,
-                  _note:
-                    'Confirme em 1ª pessoa que autorizou e tá continuando. ' +
-                    'Não mencione "Claude". O resultado virá depois.',
-                });
-              } else if (r.reason === 'no_permission') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_permission',
-                  text: 'Não tem permissão pendente pra autorizar.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.permissions ?? [])
-                  .map((p) => p.session.project ?? '(default)')
-                  .join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  permissions: r.permissions,
-                  text: `Tem ${(r.permissions ?? []).length} permissões pendentes (${list}). Pergunte qual autorizar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, { ok: false, reason: r.reason });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_deny_permission') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.denyPermission(targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Recusado. A tarefa do projeto ${r.session.project ?? '(default)'} segue sem essa permissão.`,
-                  _note: 'Confirme em 1ª pessoa. Não mencione "Claude".',
-                });
-              } else if (r.reason === 'no_permission') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_permission',
-                  text: 'Não tem permissão pendente pra recusar.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.permissions ?? [])
-                  .map((p) => p.session.project ?? '(default)')
-                  .join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  permissions: r.permissions,
-                  text: `Tem ${(r.permissions ?? []).length} permissões pendentes (${list}). Pergunte qual recusar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, { ok: false, reason: r.reason });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_reject_question') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.rejectQuestion(targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Pergunta rejeitada no projeto ${r.session.project ?? '(default)'}.`,
-                  _note: 'Confirme em 1ª pessoa. Não mencione "Claude".',
-                });
-              } else if (r.reason === 'no_question') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_question',
-                  text: 'Não tem pergunta pendente.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.questions ?? []).map((q) => q.session.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  questions: r.questions,
-                  text: `Perguntas pendentes: ${list}. Qual rejeitar?`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, { ok: false, reason: r.reason ?? 'not_found' });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_revise_plan') {
-              const feedback = typeof call.args.feedback === 'string' ? call.args.feedback.trim() : '';
-              if (!feedback) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'feedback obrigatório',
-                });
-                return;
-              }
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.revisePlan(feedback, targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Revisando plano no projeto ${r.session.project ?? '(default)'} com o feedback.`,
-                  _note:
-                    'Avise em 1ª pessoa que vai ajustar o plano com o feedback ' +
-                    '(ex: "tá, vou refazer o plano com isso, um segundo"). NÃO mencione "Claude". ' +
-                    'Quando o plano novo chegar via sistema, fale e pergunte de novo.',
-                });
-              } else if (r.reason === 'no_awaiting') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_awaiting',
-                  text: 'Não tem nenhum plano aguardando pra revisar.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  awaiting: r.awaiting,
-                  text: `Tem planos aguardando: ${list}. Pergunte qual revisar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: r.reason,
-                  text: `Não consegui revisar: ${r.detail ?? r.reason}.`,
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_reject_plan') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string } = {};
-              if (target) {
-                if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.rejectPlan(targetParam);
-              if (r.ok) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  text: `Plano rejeitado no projeto ${r.session.project ?? '(default)'}.`,
-                  _note: 'Confirme em 1ª pessoa que rejeitou. Não mencione "Claude".',
-                });
-              } else if (r.reason === 'no_awaiting') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_awaiting',
-                  text: 'Não tem nenhum plano aguardando.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.awaiting ?? []).map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  awaiting: r.awaiting,
-                  text: `Tem planos aguardando: ${list}. Pergunte qual rejeitar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: r.reason,
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_cancel_task') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
-              if (target) {
-                if (/^(all|todas|tudo|tudoo|todos)$/i.test(target)) {
-                  targetParam.all = true;
-                } else if (/^[0-9a-f-]{36}$/i.test(target)) {
-                  targetParam.sessionId = target;
-                } else {
-                  targetParam.project = target;
-                }
-              }
-              const r = await claudeManager.cancel(targetParam);
-              if (r.ok) {
-                const projects = r.cancelled.map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  cancelled: r.cancelled.length,
-                  queueDiscarded: r.queueDiscarded,
-                  text: `Cancelei ${r.cancelled.length} sessão(ões): ${projects}` +
-                    (r.queueDiscarded > 0 ? `. Descartei ${r.queueDiscarded} da fila.` : '.'),
-                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude".',
-                });
-              } else if (r.reason === 'no_running') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_running',
-                  text: 'Não tem nenhuma tarefa de código rodando.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = r.running.map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  running: r.running,
-                  text: `Tem ${r.running.length} rodando: ${list}. Pergunte qual cancelar.`,
-                  _note:
-                    'NÃO cancele nada agora. Liste os projetos pro usuário em 1ª pessoa ' +
-                    '("tenho X, Y e Z rodando — cancelo qual?") e espere a resposta. ' +
-                    'Quando ele falar, chame claude_cancel_task de novo com target=<nome>.',
-                });
-              } else {
-                const list = r.running.length > 0
-                  ? r.running.map((s) => s.project ?? '(default)').join(', ')
-                  : '(nenhuma)';
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'not_found',
-                  running: r.running,
-                  text: `Não achei sessão pra "${target}". Rodando: ${list}.`,
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_resume_crashed') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
-              if (target) {
-                if (/^(all|todas|tudo|todos)$/i.test(target)) targetParam.all = true;
-                else if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.resumeCrashed(targetParam);
-              if (r.ok) {
-                const list = r.resumed.map((s) => s.project ?? '(default)').join(', ');
-                const failedText = r.failed.length > 0
-                  ? ` Falharam: ${r.failed.map((f) => `${f.session.project ?? '(default)'} (${f.reason})`).join('; ')}.`
-                  : '';
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  resumed: r.resumed.length,
-                  failed: r.failed.length,
-                  text: `Retomando ${r.resumed.length} sessão(ões): ${list}.${failedText}`,
-                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude". Resultados virão depois.',
-                });
-              } else if (r.reason === 'no_crashed') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_crashed',
-                  text: 'Não tem sessões caídas pra retomar.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.crashed ?? []).map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  crashed: r.crashed,
-                  text: `Tem ${(r.crashed ?? []).length} caídas: ${list}. Pergunte qual retomar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: r.reason ?? 'not_found',
-                  text: 'Não achei sessão pra retomar.',
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_dismiss_crashed') {
-              const target = typeof call.args.target === 'string' ? call.args.target.trim() : '';
-              const targetParam: { sessionId?: string; project?: string; all?: boolean } = {};
-              if (target) {
-                if (/^(all|todas|tudo|todos)$/i.test(target)) targetParam.all = true;
-                else if (/^[0-9a-f-]{36}$/i.test(target)) targetParam.sessionId = target;
-                else targetParam.project = target;
-              }
-              const r = await claudeManager.dismissCrashed(targetParam);
-              if (r.ok) {
-                const list = r.dismissed.map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: true,
-                  dismissed: r.dismissed.length,
-                  text: `Descartei ${r.dismissed.length} sessão(ões): ${list}.`,
-                  _note: 'Confirme em 1ª pessoa, sem mencionar "Claude".',
-                });
-              } else if (r.reason === 'no_crashed') {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_crashed',
-                  text: 'Não tem sessões caídas pra descartar.',
-                });
-              } else if (r.reason === 'ambiguous') {
-                const list = (r.crashed ?? []).map((s) => s.project ?? '(default)').join(', ');
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'ambiguous',
-                  crashed: r.crashed,
-                  text: `Tem ${(r.crashed ?? []).length} caídas: ${list}. Pergunte qual descartar.`,
-                });
-              } else {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: r.reason ?? 'not_found',
-                });
-              }
-              return;
-            }
-
-            if (call.name === 'claude_usage_status') {
-              const snapshot = quota.getLast();
-              if (!snapshot) {
-                live?.sendToolResponse(call.id, call.name, {
-                  ok: false,
-                  reason: 'no_data',
-                  text: 'Ainda não tenho leitura de uso — primeira atualização sai em breve.',
-                });
-                return;
-              }
-              const actualPct = Math.round(snapshot.session.actualPct * 100);
-              const projPct = Math.round(snapshot.session.pctOfLimit * 100);
-              const burnLine = snapshot.session.burnRate
-                ? ` Ritmo atual: ${Math.round(snapshot.session.burnRate.tokensPerMinute / 1000)}k tokens/min.`
-                : '';
-              const remainLine = snapshot.session.remainingMinutes != null
-                ? ` Faltam ${snapshot.session.remainingMinutes}min pro reset do bloco de 5h.`
-                : '';
-              const statusLabel =
-                snapshot.status === 'critical' ? 'CRÍTICO' :
-                snapshot.status === 'warn' ? 'em alerta' : 'tranquilo';
-              live?.sendToolResponse(call.id, call.name, {
-                ok: true,
-                quota: snapshot,
-                text:
-                  `Uso de código no bloco de 5h: gastei ${actualPct}% até agora, ` +
-                  `projeção pro fim do bloco é ${projPct}% — ${statusLabel}.` +
-                  burnLine + remainLine,
-                _note:
-                  'Resuma em 1ª pessoa. Cite gasto atual E projeção (são coisas diferentes — ' +
-                  'gasto atual é o que JÁ usei; projeção é pra onde vou no ritmo de agora). ' +
-                  'Estado geral em palavras ("tô tranquilo", "tô apertado", "tô no limite"). ' +
-                  'Não mencione "Claude" — é "minha cota de código" ou similar.',
-              });
-              return;
-            }
-
-            if (call.name === 'claude_list_sessions') {
-              const running = claudeManager.running();
-              const awaiting = claudeManager.awaiting();
-              const resumable = claudeManager.resumable(); // paused + crashed
-              const queueLen = claudeManager.queueLength();
-              const parts: string[] = [];
-              if (running.length > 0) {
-                parts.push(
-                  `${running.length} rodando: ${running.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
-                );
-              }
-              if (awaiting.length > 0) {
-                parts.push(
-                  `${awaiting.length} aguardando aprovação de plano: ${awaiting.map((s) => s.project ?? '(default)').join(', ')}`,
-                );
-              }
-              const paused = resumable.filter((s) => s.status === 'paused');
-              const crashed = resumable.filter((s) => s.status === 'crashed');
-              if (paused.length > 0) {
-                parts.push(
-                  `${paused.length} pausada(s) (retomável): ${paused.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
-                );
-              }
-              if (crashed.length > 0) {
-                parts.push(
-                  `${crashed.length} caída(s) (retomável): ${crashed.map((s) => `${s.project ?? '(default)'} ("${s.taskDescription.slice(0, 60)}")`).join('; ')}`,
-                );
-              }
-              if (queueLen > 0) parts.push(`${queueLen} na fila`);
-              const summary = parts.length === 0
-                ? 'Nenhuma tarefa de código em qualquer estado.'
-                : parts.join('. ') + '.';
-              live?.sendToolResponse(call.id, call.name, {
-                ok: true,
-                running,
-                awaiting,
-                paused,
-                crashed,
-                queueLength: queueLen,
-                text: summary,
-                _note: 'Resuma em 1ª pessoa, sem mencionar "Claude".',
-              });
-              return;
-            }
-          }
-
           // Caminho 1: integrações (weather, clickup_*, play_youtube, open_project, morning_briefing)
           if (INTEGRATION_NAMES.has(call.name)) {
             const intRes = await executeIntegration(call.name, call.args);
@@ -2067,7 +1268,6 @@ function shutdownAll(): void {
   }
   shutdownHandlers.length = 0;
   wsClient?.close();
-  tts?.cancel();
   live?.stop();
   // Cancela reconnect agendado (cancelLiveReconnect é local a whenReady).
   if (liveReconnectTimer) {

@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ClaudeQuotaSnapshot,
-  ClaudeSessionStatus,
   ConnState,
   LiveState,
   RendererEvent,
 } from '../shared/ipc.js';
 import type { Widget } from '../shared/widgets.js';
 import type { ClientCommand } from '@assistant/shared';
-import { ClaudeSessionWidget, type SessionView as ClaudeSessionViewLocal } from './components/ClaudeSessionWidget.js';
 import { Orb, type OrbState } from './components/Orb.js';
 import { WidgetCard } from './components/widgets/WidgetCard.js';
 import { ChatPanel } from './components/ChatPanel.js';
@@ -50,7 +47,6 @@ const CONN_LABELS: Record<ConnState, string> = {
   error: 'erro',
 };
 
-type TtsState = { enabled: boolean; available: boolean; speaking: boolean };
 
 export function App() {
   const [conn, setConn] = useState<{ state: ConnState; reason?: string }>({
@@ -69,7 +65,6 @@ export function App() {
   const devices = useMediaDevices();
   const [userPresent, setUserPresent] = useState(true);
   const absentSinceRef = useRef<number | null>(null);
-  const [tts, setTts] = useState<TtsState>({ enabled: false, available: false, speaking: false });
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const [live, setLive] = useState<LiveState>({ kind: 'idle' });
   const [micStatus, setMicStatus] = useState<{
@@ -102,8 +97,6 @@ export function App() {
   const [netBw, setNetBw] = useState<{ rx: number; tx: number }>({ rx: 0, tx: 0 });
   const [rxHistory, setRxHistory] = useState<number[]>([]);
   const [txHistory, setTxHistory] = useState<number[]>([]);
-  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionViewLocal[]>([]);
-  const [claudeQuota, setClaudeQuota] = useState<ClaudeQuotaSnapshot | null>(null);
   const orbPaneRef = useRef<HTMLDivElement>(null);
   const micRef = useRef<MicCaptureHandle | null>(null);
   const playerRef = useRef<PcmStreamPlayer | null>(null);
@@ -206,12 +199,6 @@ export function App() {
               streaming: false,
             },
           ]);
-          break;
-        case 'tts_state':
-          setTts((prev) => ({ ...prev, enabled: event.enabled, available: event.available }));
-          break;
-        case 'tts_speaking':
-          setTts((prev) => ({ ...prev, speaking: event.speaking }));
           break;
         case 'live_state':
           setLive(event.state);
@@ -363,89 +350,10 @@ export function App() {
           });
           break;
         }
-        case 'claude_session_started':
-          setClaudeSessions((prev) => {
-            if (prev.some((s) => s.sessionId === event.session.sessionId)) return prev;
-            return [...prev, { ...event.session, chunks: [] }];
-          });
-          break;
-        case 'claude_session_chunk':
-          setClaudeSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === event.sessionId
-                ? { ...s, chunks: [...s.chunks, event.chunk].slice(-100) }
-                : s,
-            ),
-          );
-          break;
-        case 'claude_session_status':
-          setClaudeSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === event.sessionId
-                ? { ...s, status: event.status as ClaudeSessionStatus }
-                : s,
-            ),
-          );
-          break;
-        case 'claude_session_plan_ready':
-          setClaudeSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === event.sessionId
-                ? { ...s, status: 'awaiting_approval', pendingPlan: event.plan }
-                : s,
-            ),
-          );
-          break;
-        case 'claude_session_question_ready':
-          setClaudeSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === event.sessionId
-                ? { ...s, status: 'awaiting_user_input', pendingQuestion: event.question }
-                : s,
-            ),
-          );
-          break;
-        case 'claude_session_done': {
-          const sessionId = event.sessionId;
-          setClaudeSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === sessionId
-                ? {
-                    ...s,
-                    status: event.ok ? 'done' : 'failed',
-                    finalText: event.finalText,
-                  }
-                : s,
-            ),
-          );
-          // Auto-close 30s após done.
-          window.setTimeout(() => {
-            setClaudeSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
-          }, 30_000);
-          break;
-        }
-        case 'claude_quota_update':
-          setClaudeQuota(event.quota);
-          break;
-        case 'claude_sessions_snapshot':
-          // Merge: preserva chunks/finalText de sessões já em state, mas adiciona
-          // novas (do snapshot inicial pós-boot: paused/crashed/awaiting do disco).
-          setClaudeSessions((prev) => {
-            const prevById = new Map(prev.map((s) => [s.sessionId, s]));
-            return event.sessions.map((s) => {
-              const existing = prevById.get(s.sessionId);
-              return existing ? { ...existing, ...s } : { ...s, chunks: [] };
-            });
-          });
-          break;
       }
     });
     return off;
   }, []);
-
-  function dismissClaudeSession(sessionId: string) {
-    setClaudeSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
-  }
 
   // Posiciona o chat-widget no canto direito do orb-pane na 1ª montagem.
   useEffect(() => {
@@ -574,14 +482,14 @@ export function App() {
   }, [userPresent, cameraOpen, live.kind]);
 
   const orbState: OrbState = useMemo(() => {
-    if (live.kind === 'speaking' || tts.speaking) return 'speaking';
+    if (live.kind === 'speaking') return 'speaking';
     if (live.kind === 'connecting' || awaitingResponse) return 'thinking';
     const lastIsStreaming =
       messages.length > 0 &&
       messages[messages.length - 1].kind === 'text' &&
       (messages[messages.length - 1] as Extract<Message, { kind: 'text' }>).streaming;
     return lastIsStreaming ? 'thinking' : 'idle';
-  }, [messages, tts.speaking, awaitingResponse, live.kind]);
+  }, [messages, awaitingResponse, live.kind]);
 
   async function send(text: string) {
     if (!text) return;
@@ -714,7 +622,6 @@ export function App() {
         netBw={netBw}
         rxHistory={rxHistory}
         txHistory={txHistory}
-        claudeQuota={claudeQuota}
       />
       <header>
         <div className="brand">
@@ -812,18 +719,6 @@ export function App() {
               />
             </div>
           ))}
-
-          {claudeSessions.length > 0 && (
-            <div className="claude-sessions-stack">
-              {claudeSessions.map((s) => (
-                <ClaudeSessionWidget
-                  key={s.sessionId}
-                  session={s}
-                  onDismiss={dismissClaudeSession}
-                />
-              ))}
-            </div>
-          )}
 
           {memGraphOpen && (
             <div

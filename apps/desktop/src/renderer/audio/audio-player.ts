@@ -72,10 +72,9 @@ export class PcmStreamPlayer {
     if (this.ctx) this.nextStart = this.ctx.currentTime;
   }
 
-  /** Limpa o backlog — útil quando o usuário interrompe ou troca de turno. */
+  /** Corta o que estiver tocando ou agendado (interrupção ou troca de turno). */
   reset(): void {
-    if (!this.ctx) return;
-    this.nextStart = this.ctx.currentTime;
+    this.stopAll();
   }
 
   async close(): Promise<void> {

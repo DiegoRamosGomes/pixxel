@@ -10,11 +10,16 @@ export type StageState = {
   active: number;
   /** Tudo que o modelo já falou (transcrição bruta acumulada). */
   heardRaw: string;
-  /** Troca agendada: vale quando o áudio na fila terminar de tocar. */
-  pending: { index: number; at: number } | null;
+  /** Trocas agendadas: cada uma vale quando o áudio na fila chegar nela. */
+  pending: Array<{ index: number; at: number }>;
   activeSince: number;
+  openedAt: number;
   sawSpeaking: boolean;
-  /** Quando o palco fecha; definido ao fim do turno (visão final). */
+  /** Quando o áudio enfileirado acaba e a visão final pode aparecer. */
+  finalAt: number | null;
+  /** Visão final liberada (o áudio já terminou de tocar). */
+  final: boolean;
+  /** Quando o palco fecha; definido ao fim do turno. */
   closeAt: number | null;
 };
 
@@ -30,6 +35,9 @@ export type StageEvent =
 /** Quanto o palco fica na tela depois que a fala acaba. */
 export const STAGE_LINGER_MS = 6000;
 
+/** Teto de vida do palco, pra nunca ficar na tela pra sempre. */
+export const STAGE_MAX_MS = 180_000;
+
 /** Tempo máximo num cartão se a transcrição não confirmar a deixa. */
 export function fallbackMs(say: string): number {
   return Math.min(15000, Math.max(2500, say.length * 75 + 1200));
@@ -41,9 +49,12 @@ export function stageReducer(s: StageState | null, e: StageEvent): StageState | 
       segments: e.widget.segments,
       active: 0,
       heardRaw: '',
-      pending: null,
+      pending: [],
       activeSince: e.now,
+      openedAt: e.now,
       sawSpeaking: false,
+      finalAt: null,
+      final: false,
       closeAt: null,
     };
   }
@@ -57,32 +68,45 @@ export function stageReducer(s: StageState | null, e: StageEvent): StageState | 
       return { ...s, sawSpeaking: true };
     case 'model_text': {
       const heardRaw = s.heardRaw + e.text;
-      const floor = Math.max(s.active, s.pending?.index ?? -1);
-      let hit = -1;
+      // Texto do modelo já é fala, mesmo sem o aviso de 'speaking'.
+      const base = { ...s, heardRaw, sawSpeaking: true };
+      const floor = Math.max(s.active, s.pending[s.pending.length - 1]?.index ?? -1);
       for (let j = s.segments.length - 1; j > floor; j--) {
         if (cueHeard(heardRaw, s.segments[j].cue)) {
-          hit = j;
-          break;
+          // Acrescenta; nunca sobrescreve uma troca já agendada.
+          return { ...base, pending: [...s.pending, { index: j, at: e.now + e.backlogMs }] };
         }
       }
-      if (hit < 0) return { ...s, heardRaw };
-      return { ...s, heardRaw, pending: { index: hit, at: e.now + e.backlogMs } };
+      return base;
     }
-    case 'turn_end':
+    case 'turn_end': {
       if (!s.sawSpeaking) return s;
-      return { ...s, closeAt: e.now + e.backlogMs + STAGE_LINGER_MS };
+      const finalAt = e.now + e.backlogMs;
+      return { ...s, finalAt, closeAt: finalAt + STAGE_LINGER_MS };
+    }
     case 'tick': {
+      if (e.now - s.openedAt >= STAGE_MAX_MS) return null;
+      if (s.closeAt !== null && e.now >= s.closeAt) return null;
       let next = s;
-      if (s.pending && e.now >= s.pending.at) {
-        next = { ...s, active: s.pending.index, pending: null, activeSince: e.now };
+      const due = s.pending.filter((p) => e.now >= p.at);
+      if (due.length > 0) {
+        const index = Math.max(...due.map((p) => p.index));
+        next = {
+          ...next,
+          active: index,
+          activeSince: e.now,
+          pending: s.pending.filter((p) => e.now < p.at),
+        };
       } else if (
-        !s.pending &&
+        s.pending.length === 0 &&
         s.active + 1 < s.segments.length &&
         e.now - s.activeSince >= fallbackMs(s.segments[s.active].say)
       ) {
-        next = { ...s, active: s.active + 1, activeSince: e.now };
+        next = { ...next, active: s.active + 1, activeSince: e.now };
       }
-      if (next.closeAt !== null && e.now >= next.closeAt) return null;
+      if (next.finalAt !== null && !next.final && e.now >= next.finalAt) {
+        next = { ...next, final: true };
+      }
       return next;
     }
   }
@@ -104,6 +128,9 @@ export function toStageEvent(
       if (e.state.kind === 'speaking') return { type: 'speaking' };
       if (e.state.kind === 'ready' && prevLiveKind === 'speaking') {
         return { type: 'turn_end', now, backlogMs };
+      }
+      if (e.state.kind === 'error' || e.state.kind === 'closed' || e.state.kind === 'idle') {
+        return { type: 'close' };
       }
       return null;
     case 'live_interrupted':

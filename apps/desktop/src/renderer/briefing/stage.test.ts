@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { RendererEvent } from '../../shared/ipc.js';
 import type { BriefingSegment, BriefingWidget } from '../../shared/widgets.js';
 import {
   fallbackMs,
   stageReducer,
+  STAGE_MAX_MS,
   STAGE_LINGER_MS,
   toStageEvent,
   type StageState,
@@ -18,6 +20,7 @@ const widget: BriefingWidget = {
     seg('O tempo em Jaguaruna está firme.', 'o tempo em'),
     seg('Na economia, o dólar caiu.', 'na economia o'),
     seg('Em tecnologia, novo chip.', 'em tecnologia novo'),
+    seg('Mundo.', 'no mundo paises assinam'),
   ],
 };
 
@@ -53,9 +56,61 @@ describe('stageReducer', () => {
     let s = open(0);
     s = stageReducer(s, { type: 'tick', now: fallbackMs(widget.segments[0].say) })!;
     expect(s.active).toBe(1);
-    s = { ...s, active: 3, activeSince: 0 };
+    s = { ...s, active: 4, activeSince: 0 };
     s = stageReducer(s, { type: 'tick', now: 100000 })!;
-    expect(s.active).toBe(3);
+    expect(s.active).toBe(4);
+  });
+
+  it('duas deixas na mesma janela não pulam cartão', () => {
+    let s = open();
+    s = stageReducer(s, { type: 'model_text', text: 'o tempo em', now: 0, backlogMs: 3000 })!;
+    s = stageReducer(s, { type: 'model_text', text: ' na economia o', now: 1000, backlogMs: 6000 })!;
+    s = stageReducer(s, { type: 'tick', now: 3000 })!;
+    expect(s.active).toBe(1);
+    s = stageReducer(s, { type: 'tick', now: 6999 })!;
+    expect(s.active).toBe(1);
+    s = stageReducer(s, { type: 'tick', now: 7000 })!;
+    expect(s.active).toBe(2);
+  });
+
+  it('rede bloqueada com troca agendada', () => {
+    let s = open();
+    s = stageReducer(s, { type: 'model_text', text: 'o tempo em', now: 0, backlogMs: 50000 })!;
+    s = stageReducer(s, { type: 'tick', now: 20000 })!;
+    expect(s.active).toBe(0);
+  });
+
+  it('deixa partida em dois pedaços', () => {
+    let s = open();
+    s = stageReducer(s, { type: 'model_text', text: 'no mun', now: 0, backlogMs: 0 })!;
+    s = stageReducer(s, { type: 'model_text', text: 'do paises assinam', now: 1, backlogMs: 0 })!;
+    s = stageReducer(s, { type: 'tick', now: 2 })!;
+    expect(s.active).toBe(4);
+  });
+
+  it('fala sem aviso de speaking arma closeAt', () => {
+    let s = open();
+    s = stageReducer(s, { type: 'model_text', text: 'oi', now: 0, backlogMs: 0 })!;
+    s = stageReducer(s, { type: 'turn_end', now: 10, backlogMs: 0 })!;
+    expect(s.closeAt).toBe(10 + STAGE_LINGER_MS);
+  });
+
+  it('visão final espera o áudio', () => {
+    let s = open();
+    s = stageReducer(s, { type: 'speaking' })!;
+    s = stageReducer(s, { type: 'turn_end', now: 0, backlogMs: 2000 })!;
+    expect(stageReducer(s, { type: 'tick', now: 1999 })!.final).toBe(false);
+    expect(stageReducer(s, { type: 'tick', now: 2000 })!.final).toBe(true);
+  });
+
+  it('teto de vida', () => {
+    const s = open(100);
+    expect(stageReducer(s, { type: 'tick', now: 100 + STAGE_MAX_MS - 1 })).not.toBeNull();
+    expect(stageReducer(s, { type: 'tick', now: 100 + STAGE_MAX_MS })).toBeNull();
+  });
+
+  it('fallbackMs fórmula', () => {
+    expect(fallbackMs('x'.repeat(100))).toBe(8700);
   });
 
   it('fallbackMs respeita os limites', () => {
@@ -91,9 +146,16 @@ describe('toStageEvent', () => {
   });
 
   it('ready só vira turn_end depois de speaking', () => {
-    const ready = { type: 'live_state', state: { kind: 'ready' } } as never;
+    const ready = { type: 'live_state', state: { kind: 'ready' } } satisfies RendererEvent;
     expect(toStageEvent(ready, 5, 7, 'thinking')).toBeNull();
     expect(toStageEvent(ready, 5, 7, 'speaking')).toEqual({ type: 'turn_end', now: 5, backlogMs: 7 });
+  });
+
+  it('sessão caiu fecha o palco', () => {
+    const closed = { type: 'live_state', state: { kind: 'closed', reason: 'x' } } satisfies RendererEvent;
+    expect(toStageEvent(closed, 0, 0, 'speaking')).toEqual({ type: 'close' });
+    const idle = { type: 'live_state', state: { kind: 'idle' } } satisfies RendererEvent;
+    expect(toStageEvent(idle, 0, 0, '')).toEqual({ type: 'close' });
   });
 
   it('mapeia widget briefing, texto do modelo, speaking e interrupção', () => {
@@ -103,7 +165,7 @@ describe('toStageEvent', () => {
       now: 3,
     });
     expect(
-      toStageEvent({ type: 'widget', id: 'a', widget: { kind: 'tasks_list' } as never, ttlMs: 1 }, 3, 0, ''),
+      toStageEvent({ type: 'widget', id: 'a', widget: { kind: 'notifications', source: 'clickup', items: [] }, ttlMs: 1 }, 3, 0, ''),
     ).toBeNull();
     expect(toStageEvent({ type: 'live_transcript', role: 'model', text: 'oi' }, 3, 9, '')).toEqual({
       type: 'model_text',
@@ -111,7 +173,7 @@ describe('toStageEvent', () => {
       now: 3,
       backlogMs: 9,
     });
-    expect(toStageEvent({ type: 'live_state', state: { kind: 'speaking' } } as never, 0, 0, '')).toEqual({
+    expect(toStageEvent({ type: 'live_state', state: { kind: 'speaking' } } satisfies RendererEvent, 0, 0, '')).toEqual({
       type: 'speaking',
     });
     expect(toStageEvent({ type: 'live_interrupted' }, 0, 0, '')).toEqual({ type: 'interrupt' });

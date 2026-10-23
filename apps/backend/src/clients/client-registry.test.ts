@@ -80,6 +80,21 @@ describe('ClientRegistry', () => {
     expect(r.get('a')!.lastInteractionAt).toBeGreaterThan(0);
   });
 
+  it('contexto de retomada vence depois de 15 minutos', () => {
+    vi.useFakeTimers();
+    try {
+      const r = new ClientRegistry();
+      r.saveRecovery('a', { resumptionHandle: 'h' });
+      vi.advanceTimersByTime(15 * 60_000 + 1);
+      expect(r.takeRecovery('a')).toBeUndefined();
+      r.saveRecovery('b', { resumptionHandle: 'h2' });
+      vi.advanceTimersByTime(14 * 60_000);
+      expect(r.takeRecovery('b')).toEqual({ resumptionHandle: 'h2' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('takeRecovery consome o contexto', () => {
     const r = new ClientRegistry();
     r.saveRecovery('a', { resumptionHandle: 'h' });

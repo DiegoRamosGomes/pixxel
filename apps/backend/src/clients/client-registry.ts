@@ -36,9 +36,13 @@ export type ConnectedClient = {
   connectedAt: number;
 };
 
+// Retomada é pra queda/sono curto. Depois disso a conversa velha atrapalha
+// (e o handle de resumption do Gemini expira).
+const RECOVERY_TTL_MS = 15 * 60_000;
+
 export class ClientRegistry {
   private readonly clients = new Map<string, ConnectedClient>();
-  private readonly recovery = new Map<string, LiveRecoveryContext>();
+  private readonly recovery = new Map<string, { ctx: LiveRecoveryContext; savedAt: number }>();
 
   /** Registra o cliente; devolve o anterior com o mesmo clientId, se havia. */
   add(c: ConnectedClient): ConnectedClient | undefined {
@@ -87,12 +91,13 @@ export class ClientRegistry {
   }
 
   saveRecovery(clientId: string, ctx: LiveRecoveryContext): void {
-    this.recovery.set(clientId, ctx);
+    this.recovery.set(clientId, { ctx, savedAt: Date.now() });
   }
 
   takeRecovery(clientId: string): LiveRecoveryContext | undefined {
-    const ctx = this.recovery.get(clientId);
+    const entry = this.recovery.get(clientId);
     this.recovery.delete(clientId);
-    return ctx;
+    if (!entry || Date.now() - entry.savedAt > RECOVERY_TTL_MS) return undefined;
+    return entry.ctx;
   }
 }

@@ -164,16 +164,44 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
     },
   },
   {
+    name: 'system_status',
+    description:
+      'Estado do hardware: CPU, memória, rede e processos que mais consomem. ' +
+      'target=server é o servidor de casa onde o Pixxel roda; target=device é ' +
+      'o computador ou celular que o usuário está usando agora ("meu computador", ' +
+      '"esta máquina"). USE em "como está o servidor", "como tá meu computador", ' +
+      '"tá pesado?", "quem tá comendo CPU".',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['server', 'device'],
+          description: 'De qual máquina: "server" (servidor de casa) ou "device" (dispositivo atual).',
+        },
+      },
+      required: ['target'],
+    },
+  },
+  {
     name: 'storage_status',
     description:
       'Status de armazenamento do sistema (espaço total, usado e disponível). ' +
       'USE quando o usuário perguntar "quanto tem de espaço", "qual meu disco", ' +
       '"quanto sobrou de HD", "tá cheio o disco?", "espaço livre", e variações. ' +
       'Default: partição raiz (/). Passe mount="all" se ele quiser TODOS os ' +
-      'discos/partições, ou um caminho específico ("/home", "/media/x") se citado.',
+      'discos/partições, ou um caminho específico ("/home", "/media/x") se citado. ' +
+      'target="server" é o servidor de casa onde o Pixxel roda; target="device" é ' +
+      'o computador ou celular que o usuário está usando agora ("meu computador", ' +
+      '"esta máquina").',
     parameters: {
       type: 'object',
       properties: {
+        target: {
+          type: 'string',
+          enum: ['server', 'device'],
+          description: 'De qual máquina: "server" (servidor de casa) ou "device" (dispositivo atual).',
+        },
         mount: {
           type: 'string',
           description:
@@ -181,6 +209,7 @@ export const INTEGRATION_TOOLS: ToolDeclaration[] = [
             'todos os filesystems reais (ignora tmpfs/etc).',
         },
       },
+      required: ['target'],
     },
   },
   {

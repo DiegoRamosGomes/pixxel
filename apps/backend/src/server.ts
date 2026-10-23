@@ -116,6 +116,7 @@ function createSession(client: ConnectedClient, recovery: LiveRecoveryContext | 
       audio: (pcm) => client.sendAudio(pcm),
       transcript: (role, text) => client.send({ type: 'transcript', role, text }),
       widget: (w) => client.send({ type: 'widget', ...w }),
+      interrupted: () => client.send({ type: 'voice_interrupted' }),
     },
     isFirstBriefingOfDay,
     onReady: () => notices.onSessionReady(),

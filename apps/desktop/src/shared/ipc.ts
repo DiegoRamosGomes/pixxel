@@ -10,6 +10,7 @@ import type { LiveState } from '@assistant/shared';
 export type RendererEvent =
   | { type: 'conn'; state: ConnState; reason?: string }
   | { type: 'live_state'; state: LiveState }
+  | { type: 'live_interrupted' }
   | { type: 'live_audio'; pcm: ArrayBuffer; sampleRate: number }
   | { type: 'live_transcript'; role: 'user' | 'model'; text: string }
   | { type: 'widget'; id: string; widget: Widget; ttlMs: number }

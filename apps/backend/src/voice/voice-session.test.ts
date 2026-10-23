@@ -44,6 +44,10 @@ class FakeLive implements LiveClientLike {
   emitTranscript(text: string, role: 'user' | 'model') {
     this.listeners.onTranscript?.(text, role);
   }
+  emitInterrupted() {
+    this.listeners.onInterrupted?.();
+    this.listeners.onState({ kind: 'ready' });
+  }
   emitEmptyTurn() {
     this.listeners.onEmptyTurn?.();
     this.listeners.onState({ kind: 'ready' });
@@ -75,10 +79,25 @@ describe('VoiceSession', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     lives = [];
-    sink = { state: vi.fn(), audio: vi.fn(), transcript: vi.fn(), widget: vi.fn() };
+    sink = { state: vi.fn(), audio: vi.fn(), transcript: vi.fn(), widget: vi.fn(), interrupted: vi.fn() };
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('interrupção descarta widget pendente e avisa o sink', async () => {
+    const executeTool = vi.fn(async (): Promise<ToolOutcome> => ({
+      response: { ok: true, text: 't' },
+      widgets: [{ widget: { kind: 'weather' } as never, delayMs: 0 }],
+    }));
+    const s = make({ executeTool });
+    s.start();
+    lives[0].emitToolCall({ id: '1', name: 'weather', args: {} });
+    await flush();
+    lives[0].emitInterrupted();
+    lives[0].emitAudio(Buffer.from([1, 2]));
+    expect(sink.interrupted).toHaveBeenCalledTimes(1);
+    expect(sink.widget).not.toHaveBeenCalled();
   });
 
   it('sem chave do Gemini fica indisponível', () => {

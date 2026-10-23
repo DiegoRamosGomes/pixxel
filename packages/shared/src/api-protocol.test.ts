@@ -52,4 +52,8 @@ describe('estado da apresentação', () => {
     expect(ApiServerMessageSchema.safeParse({ type: 'presentation_state', running: true }).success).toBe(true);
     expect(ApiServerMessageSchema.safeParse({ type: 'presentation_state' }).success).toBe(false);
   });
+
+  it('API avisa o cliente quando a fala do modelo é interrompida', () => {
+    expect(() => ApiServerMessageSchema.parse({ type: 'voice_interrupted' })).not.toThrow();
+  });
 });

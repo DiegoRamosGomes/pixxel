@@ -85,6 +85,8 @@ export const ApiServerMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello_ok'), clientId: z.string() }),
   z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),
   z.object({ type: z.literal('voice_state'), state: LiveStateSchema }),
+  // Usuário interrompeu a fala do modelo: o cliente descarta o áudio enfileirado.
+  z.object({ type: z.literal('voice_interrupted') }),
   z.object({ type: z.literal('transcript'), role: z.enum(['user', 'model']), text: z.string() }),
   z.object({ type: z.literal('widget'), id: z.string(), widget: WidgetSchema, ttlMs: z.number() }),
   z.object({ type: z.literal('widget_dismiss'), id: z.string() }),

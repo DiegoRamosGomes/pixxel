@@ -130,8 +130,10 @@ describe('ApiClient', () => {
     sockets[0].send(JSON.stringify({ type: 'voice_state', state: { kind: 'ready' } }));
     sockets[0].send(JSON.stringify({ type: 'transcript', role: 'model', text: 'oi' }));
     sockets[0].send(JSON.stringify({ type: 'widget', id: 'w1', widget: { kind: 'weather' }, ttlMs: 30000 }));
+    sockets[0].send(JSON.stringify({ type: 'voice_interrupted' }));
     sockets[0].send(JSON.stringify({ type: 'widget_dismiss', id: 'w1' }));
     await until(() => events.some((e) => e.type === 'widget_dismiss'));
+    expect(events).toContainEqual({ type: 'live_interrupted' });
     expect(events).toContainEqual({ type: 'live_state', state: { kind: 'ready' } });
     expect(events).toContainEqual({ type: 'live_transcript', role: 'model', text: 'oi' });
     expect(events).toContainEqual({ type: 'widget', id: 'w1', widget: { kind: 'weather' }, ttlMs: 30000 });

@@ -254,6 +254,8 @@ export type GeminiLiveListeners = {
    * nativo faz isso de vez em quando com texto digitado (clientContent).
    */
   onEmptyTurn?: () => void;
+  /** Usuário falou por cima do modelo (serverContent.interrupted). */
+  onInterrupted?: () => void;
 };
 
 export type GeminiLiveOptions = {
@@ -681,6 +683,8 @@ export class GeminiLiveClient {
       this.flushTurnToHistory();
       this.modelSpeaking = false;
       if (empty) this.listeners.onEmptyTurn?.();
+      // Antes do ready: o cliente recebe o sinal de interrupção e só depois o estado.
+      if (sc.interrupted) this.listeners.onInterrupted?.();
       this.setState({ kind: 'ready' });
     }
   }

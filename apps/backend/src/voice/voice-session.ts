@@ -56,6 +56,8 @@ export type VoiceSessionDeps = {
     audio(pcm24k: Buffer): void;
     transcript(role: 'user' | 'model', text: string): void;
     widget(w: QueuedWidget): void;
+    /** Fala do modelo cortada pelo usuário: o cliente para o áudio já enfileirado. */
+    interrupted(): void;
   };
   isFirstBriefingOfDay(): Promise<boolean>;
   onReady?(): void;
@@ -216,6 +218,13 @@ export class VoiceSession implements VoiceSessionHandle {
         this.retry = null;
         void this.handleToolCall(client!, call, pendingWidgets, recentCalls);
       },
+    };
+
+    listeners.onInterrupted = () => {
+      if (!isCurrent()) return;
+      // Widget que esperava o primeiro áudio perdeu o sentido: a fala foi cortada.
+      pendingWidgets.length = 0;
+      this.deps.sink.interrupted();
     };
 
     listeners.onEmptyTurn = () => {

@@ -215,6 +215,9 @@ export class ApiClient {
       case 'voice_state':
         this.opts.emit({ type: 'live_state', state: msg.state });
         return;
+      case 'voice_interrupted':
+        this.opts.emit({ type: 'live_interrupted' });
+        return;
       case 'transcript':
         this.opts.emit({ type: 'live_transcript', role: msg.role, text: msg.text });
         return;
